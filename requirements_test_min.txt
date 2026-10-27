@@ -1,0 +1,2 @@
+# Newest harness release for the Home Assistant 2026.8 minimum.
+pytest-homeassistant-custom-component==0.13.355

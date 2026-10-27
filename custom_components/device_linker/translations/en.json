@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Choose the devices",
+        "description": "Choose the device to link and the peer device that may already have its MAC address.",
+        "data": {
+          "device_id": "Device to link",
+          "peer_device_id": "Peer device (may have the MAC address)"
+        }
+      },
+      "mac": {
+        "title": "Confirm or enter the MAC address",
+        "description": "Choose a MAC address registered on {peer_name}. If none is available, enter the MAC address manually for {target_name}.",
+        "data": {
+          "selected_mac_address": "MAC address found on peer device",
+          "mac_address": "Manual MAC address"
+        }
+      }
+    },
+    "error": {
+      "device_not_found": "One of the selected devices is no longer available. Choose both devices again.",
+      "same_device": "Choose two different devices.",
+      "same_config_entry": "These devices belong to the same integration entry and cannot be linked this way. Choose devices from different integrations or entries.",
+      "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
+      "connection_conflict": "Another device from the target device’s integration already uses this MAC address."
+    },
+    "abort": {
+      "already_configured": "This device and MAC address are already configured.",
+      "already_linked": "Home Assistant already links these devices through a shared identifier or connection.",
+      "device_not_found": "One of the selected devices is no longer available.",
+      "same_config_entry": "The selected devices belong to the same config entry.",
+      "not_enough_devices": "At least two devices from different config entries are needed to create a link."
+    }
+  }
+}

@@ -1,0 +1,14 @@
+# Create or refresh a draft release on every push to main.
+name: Draft release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    uses: bisman-automations/.github/.github/workflows/ha-draft-release.yml@main

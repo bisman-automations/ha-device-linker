@@ -1,0 +1,21 @@
+# Shared hassfest, HACS, and repository standards checks.
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    uses: bisman-automations/.github/.github/workflows/ha-validate.yml@main

@@ -1,0 +1,4 @@
+# Newest Home Assistant test harness, intentionally unpinned for CI.
+pytest-homeassistant-custom-component
+# Linter pinned to the organization standard.
+ruff==0.17.2

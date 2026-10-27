@@ -1,0 +1,27 @@
+# Tool settings only; this repository is not a Python package.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-sort-within-sections = true
+known-first-party = ["custom_components", "homeassistant", "tests"]
+combine-as-imports = true
+split-on-trailing-comma = false
+
+[tool.coverage.run]
+source = ["custom_components/device_linker"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

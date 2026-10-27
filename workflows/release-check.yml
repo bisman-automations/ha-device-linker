@@ -1,0 +1,13 @@
+# Check that a published release matches the manifest and changelog.
+name: Release check
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release-check:
+    uses: bisman-automations/.github/.github/workflows/ha-release-check.yml@main

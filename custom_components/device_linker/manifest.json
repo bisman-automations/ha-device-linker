@@ -1,0 +1,12 @@
+{
+  "domain": "device_linker",
+  "name": "Device Linker",
+  "codeowners": [
+    "@donavanbecker"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/bisman-automations/ha-device-linker",
+  "iot_class": "calculated",
+  "version": "1.0.0",
+  "homeassistant": "2026.8.0"
+}

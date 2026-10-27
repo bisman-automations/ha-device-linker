@@ -1,0 +1,23 @@
+# Shared Home Assistant test workflow.
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    uses: bisman-automations/.github/.github/workflows/ha-test.yml@main
+    with:
+      python-min: "3.14"
