@@ -16,13 +16,50 @@ from .const import (
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
     CONF_MAIN_DEVICE_ID,
+    CONF_MATCH_HARDWARE,
+    CONF_MATCH_NAMES,
     CONF_SELECTED_MAC_ADDRESS,
+    CONF_SUGGESTION_THRESHOLD,
     DOMAIN,
     MAC_PATTERN,
+    REASON_IDENTIFIER,
+    REASON_MAC,
+    REASON_NAME,
+    SUGGESTION_THRESHOLD_MAX,
+    SUGGESTION_THRESHOLD_MIN,
+    SUGGESTION_THRESHOLD_STEP,
+)
+from .manager import (
+    async_apply_suggestion_preferences,
+    async_get_manager,
+    async_load_settings,
+    plan_entry_data,
 )
 from .registry import get_device, get_entry_settings
 
 MANUAL_ENTRY = "__manual_entry__"
+
+
+def _suggestion_schema(
+    threshold: float, match_hardware: bool, match_names: bool
+) -> dict[vol.Marker, object]:
+    """Options fields for suggestion signals. The same values apply to every entry."""
+    return {
+        vol.Optional(
+            CONF_SUGGESTION_THRESHOLD, default=threshold
+        ): selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=SUGGESTION_THRESHOLD_MIN,
+                max=SUGGESTION_THRESHOLD_MAX,
+                step=SUGGESTION_THRESHOLD_STEP,
+                mode=selector.NumberSelectorMode.SLIDER,
+            )
+        ),
+        vol.Optional(
+            CONF_MATCH_HARDWARE, default=match_hardware
+        ): selector.BooleanSelector(),
+        vol.Optional(CONF_MATCH_NAMES, default=match_names): selector.BooleanSelector(),
+    }
 
 
 class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -34,6 +71,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize flow state."""
         self._main_device_id: str | None = None
         self._linked_device_ids: list[str] = []
+        self._discovery: dict[str, Any] | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Choose the device that has the MAC address, or manual entry."""
@@ -321,6 +359,125 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         return f"{label} — {', '.join(macs) if macs else 'no registered MAC'}"
 
+    async def async_step_discovery(self, discovery_info: dict[str, Any]):
+        """Offer a discovered link and remember it so Ignore can find it."""
+        self._discovery = discovery_info
+        await self.async_set_unique_id(discovery_info["unique_id"])
+        self._abort_if_unique_id_configured()
+        manager = async_get_manager(self.hass)
+        if manager is not None and manager.is_dismissed(discovery_info["unique_id"]):
+            return self.async_abort(reason="ignored")
+        self.context["title_placeholders"] = {
+            "device_a": discovery_info["name_a"],
+            "device_b": discovery_info["name_b"],
+        }
+        reason = discovery_info["reason"]
+        if reason == REASON_MAC:
+            return await self.async_step_discovery_mac()
+        if reason == REASON_IDENTIFIER:
+            return await self.async_step_discovery_identifier()
+        return await self.async_step_discovery_name()
+
+    async def async_step_discovery_mac(self, user_input: dict[str, Any] | None = None):
+        """Confirm a MAC-address match."""
+        return await self._async_discovery_confirm(REASON_MAC, user_input)
+
+    async def async_step_discovery_identifier(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Confirm a hardware-identifier match."""
+        return await self._async_discovery_confirm(REASON_IDENTIFIER, user_input)
+
+    async def async_step_discovery_name(self, user_input: dict[str, Any] | None = None):
+        """Confirm a same-area name match."""
+        return await self._async_discovery_confirm(REASON_NAME, user_input)
+
+    async def async_step_ignore(self, user_input: dict[str, Any]):
+        """Persist a dismissed suggestion, then store Home Assistant's ignore entry.
+
+        The integrations page calls this when the user chooses Ignore. The
+        unique id is kept in the suggestion store so the pair does not come
+        back even if that ignore entry is removed later.
+        """
+        unique_id = user_input["unique_id"]
+        manager = async_get_manager(self.hass)
+        if manager is not None:
+            await manager.async_dismiss(unique_id)
+        await self.async_set_unique_id(unique_id, raise_on_progress=False)
+        return self.async_create_entry(title=user_input["title"], data={})
+
+    async def _async_discovery_confirm(
+        self, reason: str, user_input: dict[str, Any] | None
+    ):
+        """Create the link, or show the MAC confirmation form."""
+        discovery = self._discovery or {}
+        registry = dr.async_get(self.hass)
+        device_a = get_device(registry, discovery.get("device_id_a", ""))
+        device_b = get_device(registry, discovery.get("device_id_b", ""))
+        if device_a is None or device_b is None:
+            return self.async_abort(reason="device_not_found")
+
+        discovered = self._discovery_macs(
+            device_a, device_b, discovery.get("mac") or None
+        )
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            mac_address = self._submitted_mac(user_input)
+            if not mac_address or not MAC_PATTERN.fullmatch(mac_address):
+                errors["base"] = "invalid_mac"
+            else:
+                mac_address = dr.format_mac(mac_address)
+                connection = (dr.CONNECTION_NETWORK_MAC, mac_address)
+                conflicts = self._connection_conflicts(
+                    registry, [device_a, device_b], connection
+                )
+                if conflicts:
+                    errors["base"] = "connection_conflict"
+                else:
+                    data = plan_entry_data(
+                        device_a.id,
+                        device_b.id,
+                        mac_address,
+                        set(device_a.connections),
+                        set(device_b.connections),
+                    )
+                    return self.async_create_entry(
+                        title=f"Link {self._display_name(device_a)} with {self._display_name(device_b)}",
+                        data=data,
+                    )
+
+        return self.async_show_form(
+            step_id=f"discovery_{reason}",
+            data_schema=self._mac_schema(discovered),
+            errors=errors,
+            description_placeholders=self._discovery_placeholders(discovery),
+        )
+
+    @staticmethod
+    def _discovery_macs(device_a, device_b, suggested: str | None) -> list[str]:
+        """MAC addresses already on either device, with the suggested one first."""
+        found = {
+            dr.format_mac(value)
+            for device in (device_a, device_b)
+            for connection_type, value in device.connections
+            if connection_type == dr.CONNECTION_NETWORK_MAC
+        }
+        if suggested:
+            found.add(dr.format_mac(suggested))
+        return sorted(found)
+
+    @staticmethod
+    def _discovery_placeholders(discovery: dict[str, Any]) -> dict[str, str]:
+        return {
+            "device_a": str(discovery.get("name_a", "")),
+            "device_b": str(discovery.get("name_b", "")),
+            "integration_a": str(discovery.get("integration_a", "")),
+            "integration_b": str(discovery.get("integration_b", "")),
+            "area_a": str(discovery.get("area_a", "Unassigned")),
+            "area_b": str(discovery.get("area_b", "Unassigned")),
+            "score": str(discovery.get("score", "")),
+        }
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry):
@@ -368,6 +525,13 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
         errors: dict[str, str] = {}
         conflicting_devices: list[str] = []
         if user_input is not None:
+            await async_apply_suggestion_preferences(self.hass, user_input)
+            for preference_key in (
+                CONF_SUGGESTION_THRESHOLD,
+                CONF_MATCH_HARDWARE,
+                CONF_MATCH_NAMES,
+            ):
+                user_input.pop(preference_key, None)
             linked_ids = list(dict.fromkeys(user_input[CONF_LINKED_DEVICE_IDS]))
             mac_address = DeviceLinkerConfigFlow._submitted_mac(user_input)
             devices = [get_device(registry, device_id) for device_id in linked_ids]
@@ -455,6 +619,12 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
             schema[vol.Optional(CONF_MAC_ADDRESS)] = str
         else:
             schema[vol.Required(CONF_MAC_ADDRESS, default=current_mac)] = str
+        settings = await async_load_settings(self.hass)
+        schema.update(
+            _suggestion_schema(
+                settings.threshold, settings.match_hardware, settings.match_names
+            )
+        )
         return self.async_show_form(
             step_id="configure",
             data_schema=vol.Schema(schema),

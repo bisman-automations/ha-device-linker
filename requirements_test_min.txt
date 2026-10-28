@@ -1,2 +1,5 @@
-# Newest harness release for the Home Assistant 2026.8 minimum.
-pytest-homeassistant-custom-component==0.13.355
+# The oldest Home Assistant this integration supports (hacs.json: 2026.8.0).
+# pytest-homeassistant-custom-component 0.13.357 is Home Assistant 2026.8.3,
+# the newest harness release of 2026.8. It needs Python 3.14 (python-min in
+# .github/workflows/test.yml). Raise this together with hacs.json; see CLAUDE.md.
+pytest-homeassistant-custom-component==0.13.357

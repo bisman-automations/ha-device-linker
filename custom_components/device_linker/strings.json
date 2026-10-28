@@ -22,6 +22,30 @@
           "selected_mac_address": "MAC address on the main device",
           "mac_address": "Manual MAC address"
         }
+      },
+      "discovery_mac": {
+        "title": "Link {device_a} with {device_b}?",
+        "description": "These devices share a MAC address, so this is a strong match even when they are in different areas. {device_a} ({integration_a}) is in {area_a}. {device_b} ({integration_b}) is in {area_b}.",
+        "data": {
+          "selected_mac_address": "MAC address",
+          "mac_address": "Manual MAC address"
+        }
+      },
+      "discovery_identifier": {
+        "title": "Link {device_a} with {device_b}?",
+        "description": "These devices share a hardware identifier, such as a Zigbee address, Bluetooth MAC, or serial number. {device_a} ({integration_a}) is in {area_a}. {device_b} ({integration_b}) is in {area_b}.",
+        "data": {
+          "selected_mac_address": "MAC address",
+          "mac_address": "Manual MAC address"
+        }
+      },
+      "discovery_name": {
+        "title": "Link {device_a} with {device_b}?",
+        "description": "These devices are in the same area and their names are similar ({score}). {device_a} ({integration_a}) and {device_b} ({integration_b}), area {area_a}.",
+        "data": {
+          "selected_mac_address": "MAC address",
+          "mac_address": "Manual MAC address"
+        }
       }
     },
     "error": {
@@ -33,18 +57,22 @@
     },
     "abort": {
       "already_configured": "This device group and MAC address are already configured.",
-      "no_devices": "Add devices in another integration before configuring Device Linker."
+      "no_devices": "Add devices in another integration before configuring Device Linker.",
+      "ignored": "This link suggestion was ignored and will not be offered again."
     }
   },
   "options": {
     "step": {
       "configure": {
         "title": "Edit linked devices",
-        "description": "The main device stays the same. Currently selected devices: {linked_device_names}. Update the MAC address or change the selection. Remove a device to unlink it; clear the selection to unlink all devices.",
+        "description": "The main device stays the same. Currently selected devices: {linked_device_names}. Update the MAC address or change the selection. Remove a device to unlink it; clear the selection to unlink all devices. Suggestion settings at the bottom apply to every Device Linker entry.",
         "data": {
           "linked_device_ids": "Devices to link",
           "selected_mac_address": "MAC address on the main device",
-          "mac_address": "Manual MAC address"
+          "mac_address": "Manual MAC address",
+          "suggestion_threshold": "Name similarity",
+          "match_hardware": "Suggest MAC and identifier matches",
+          "match_names": "Suggest similar names in the same area"
         }
       }
     },
@@ -54,6 +82,19 @@
       "no_linked_devices": "Select at least one device to link.",
       "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
       "connection_conflict": "The MAC address is already assigned to {conflicting_devices}. Select a different MAC address or remove the conflicting device."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "suggestions": {
+        "name": "Suggestions"
+      }
+    }
+  },
+  "services": {
+    "rescan_suggestions": {
+      "name": "Rescan suggestions",
+      "description": "Look again for devices that share a MAC address or hardware identifier, and for devices in the same area with similar names."
     }
   }
 }

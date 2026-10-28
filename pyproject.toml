@@ -1,15 +1,17 @@
-# Tool settings only; this repository is not a Python package.
+# Tool settings only: this repo isn't a Python package, and the version lives
+# in custom_components/device_linker/manifest.json. The pytest, ruff and coverage
+# settings follow bisman-automations/.github templates/repo/pyproject.toml;
+# anything repo-specific is marked.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
+# The oldest Python the minimum Home Assistant in hacs.json runs on.
 target-version = "py314"
 line-length = 88
-extend-exclude = [".venv-min"]
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "UP", "W"]

@@ -1,30 +1,57 @@
 # Device Linker: notes for Claude and other coding agents
 
-Home Assistant custom integration (`device_linker`), installed through HACS. It adds a shared MAC address connection to a selected existing device so Home Assistant can show the related device from another integration under **Linked devices**. Read this before changing anything.
+Device Linker is a HACS custom integration (`custom_components/device_linker`, domain `device_linker`). It adds one shared MAC address connection to devices that are already in Home Assistant, so Home Assistant can show them together under **Linked devices**. It links registry entries. It does not merge devices or copy their entities.
+
+It also suggests devices to link: a shared MAC or hardware identifier first (across areas), then similar names in the same area. Read this before changing anything.
 
 ## Layout
 
-- `custom_components/device_linker/`: the integration.
-  - `__init__.py`: setup, registry-link restoration, unload, and removal cleanup.
-  - `config_flow.py`: device and MAC selection.
-- `tests/`: pytest coverage.
-- `README.md` is user documentation; `CHANGELOG.md` is the release history.
+| Path | What it is |
+| --- | --- |
+| `__init__.py` | Setup, unload, and removal. On setup, puts the shared MAC on each linked device this entry owns, listens for device-registry updates so a refresh does not drop that connection, and starts the suggestion manager. Unload stops the listener and leaves the connections in place. Removal deletes only connections this entry added. Ignored discoveries are config entries with no link; setup returns immediately. |
+| `config_flow.py` | Config flow (main device, linked devices, MAC), discovery flows (`discovery_mac`, `discovery_identifier`, `discovery_name`), the ignore step, and the options flow. `MANUAL_ENTRY` is the manual-MAC path and must stay available. |
+| `matching.py` | Pure suggestion engine. No Home Assistant imports. Name normalization, hardware keys, ranking. |
+| `manager.py` | Loads preferences, debounces registry updates, publishes discovery flows, and owns the sensor. |
+| `sensor.py` | Diagnostic **Suggestions** sensor. |
+| `diagnostics.py` | Config-entry diagnostics. MAC addresses are redacted. |
+| `registry.py` | `get_device` and `get_entry_settings`. No flow logic. |
+| `const.py` | Domain, storage keys, and `MAC_PATTERN`. No Home Assistant imports. |
+| `strings.json`, `translations/en.json` | The same keys. Home Assistant loads `translations/en.json`. |
+| `services.yaml` | `rescan_suggestions`. |
+| `brand/` | `icon.png` (256) and `icon@2x.png` (512), the same artwork as `logo.png` and `logo@2x.png`, plus dark variants. `python scripts/make_brand.py` rebuilds the dark variants from the light icons. |
+| `scripts/make_brand.py` | Knocks the white background out of the light icons to make `dark_icon` and `dark_logo`. Needs Pillow, which is not a dependency of the integration (hassfest rejects Pillow in `requirements`). |
+| `tests/test_mac.py`, `tests/test_matching.py` | Pure tests, loaded without the integration package. |
+| `tests/ha/` | Config flow, options, legacy settings, the registry link, and suggestions, inside Home Assistant. |
 
-## Checks
-
-Run the shared checks plus anything specific to this repo: in Python 3.14, install `requirements_test.txt`, then run `ruff check .`, `ruff format --check .`, and `pytest`. The oldest supported Home Assistant harness is pinned in `requirements_test_min.txt`.
+Paths under `custom_components/device_linker/` unless noted.
 
 ## Conventions
 
-- Config entries store the target and peer device IDs, normalized MAC address, and whether this entry added the connection.
-- The config flow only offers MAC addresses registered on the selected peer device; keep the manual-entry/no-peer path available.
-- Keep the registry link across unload/reload; remove it only when the config entry is removed and only if this entry added it.
-- Keep `strings.json` and `translations/en.json` keys synchronized.
-- Do not put personal details or real device identifiers in this repository.
+- **Storage (current entries).** `main_device_id` (or null for manual MAC entry), `linked_device_ids`, `mac_address` (lowercase, colon-separated, from `format_mac`), and `added_connections`: a map of linked device id to whether this entry added that MAC. Removal and unlinking delete a connection only when the map says this entry added it.
+- **Old entries stay readable.** `get_entry_settings` accepts them, and the options flow can save them in the current shape.
+  - 1.0.0 stored one pair: `device_id` is the device that receives the MAC, `peer_device_id` is the device that already has it (the main device), and `added_connection` is the single ownership flag.
+  - The earlier multi-select build stored `device_id` as the main device and `target_devices` as the linked ids. It did not record ownership, so `added_connections` is false for each of them and a later edit will not remove a MAC it cannot prove it added.
+- **The flow.** User step: pick the main device, or **Manual MAC entry**. Devices step: pick one or more devices to link. Confirm step: pick a MAC registered on the main device, or type one. Colons and hyphens are both accepted; the stored value is normalized.
+- **Who can share a MAC.** Home Assistant requires a connection to be unique inside one config entry. The main device and every linked device must come from different config entries, and the linked devices must not share a config entry with each other. The confirm step names the device that already has the MAC.
+- **The main device stays fixed** in the options flow. Changing the selection unlinks what was removed. Clearing the selection unlinks every device. Only owned connections are removed.
+- **Unload keeps the link.** The listener is stopped and the MAC stays. Removal of the config entry is what deletes owned connections.
+- **Skip composite devices.** `get_device` returns none when `is_composite_device` is set, so a synthetic device is not offered as a link target.
+- **Suggestions.** `matching.suggest` ranks MAC matches, then other hardware identifiers, then same-area name similarity. Default threshold is 0.8 (`DEFAULT_SUGGESTION_THRESHOLD`), edited in the options flow (number selector, 0.5 to 1, step 0.05) and stored for the whole integration in `device_linker.suggestions`, along with the two signal switches and dismissed unique ids. Dismissal is permanent. Discovery flows are capped at 10; the sensor and diagnostics list up to 25. Registry updates debounce for 2 seconds. A device that already shares a network-MAC or Bluetooth connection is already linked and is not suggested. Devices from `device_linker` itself are not candidates.
+- **Support Home Assistant 2026.8 and newer** (`hacs.json`). Do not lower that minimum without retesting device-registry connections on the older release. `requirements_test_min.txt` pins the newest pytest-homeassistant-custom-component release of 2026.8.
+- `strings.json` and `translations/en.json` must be identical.
+- `manifest.json` keys: `domain`, `name`, then alphabetical (hassfest). `issue_tracker` is the GitHub issues URL.
+
+## Checks
+
+The shared checks at the end of this file. There is no mypy and there are no Node tests. Run pytest on the newest Home Assistant and, when registry behavior could differ, on `requirements_test_min.txt` as well. Both need Python 3.14.
+
+- Treat any `Detected that custom integration 'device_linker' ...` warning as a bug to fix, even if tests pass.
+- `tests/test_mac.py` and `tests/test_matching.py` cover the pure helpers. `tests/ha/` runs inside Home Assistant: the config and options flows, legacy entries, setup, unload, and removal, and suggestion discovery, dismissal, debounce, and options.
 
 ## Open decisions
 
 - None.
+
 
 <!-- BEGIN bisman-automations shared rules -->
 <!-- This block is the same in every bisman-automations repo. Edit it in

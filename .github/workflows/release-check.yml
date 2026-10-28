@@ -1,4 +1,6 @@
-# Check that a published release matches the manifest and changelog.
+# Release check: when a release is published (its tag is pushed), confirm the
+# tag matches manifest.json and CHANGELOG.md and is on main. Shared workflow:
+# https://github.com/bisman-automations/.github (.github/workflows/ha-release-check.yml).
 name: Release check
 
 on:

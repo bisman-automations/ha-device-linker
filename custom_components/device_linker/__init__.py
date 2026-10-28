@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.config_entries import ConfigEntry
@@ -13,15 +14,24 @@ from .const import (
     CONF_ADDED_CONNECTIONS,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
+    DATA_MANAGER,
     DOMAIN,
 )
+from .manager import SuggestionManager, entry_is_link
 from .registry import get_device, get_entry_settings
 
 _LOGGER = logging.getLogger(__name__)
 
+PLATFORMS = ["sensor"]
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Attach the shared MAC connection to all selected linked devices."""
+    """Attach the shared MAC connection and keep suggestions running."""
+    if not entry_is_link(entry):
+        # An ignored discovery is stored as a config entry so Home Assistant
+        # remembers it. It does not link devices.
+        return True
+
     registry = dr.async_get(hass)
     settings = get_entry_settings(entry)
     linked_device_ids = list(settings[CONF_LINKED_DEVICE_IDS])
@@ -76,20 +86,52 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unsubscribe = hass.bus.async_listen(
         dr.EVENT_DEVICE_REGISTRY_UPDATED, _restore_owned_links
     )
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = unsubscribe
+    # Count before any further await so two entries unloading together can
+    # tell which one is the last and must stop the suggestion manager.
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_data["link_count"] = domain_data.get("link_count", 0) + 1
+    domain_data[entry.entry_id] = unsubscribe
+
+    manager = domain_data.get(DATA_MANAGER)
+    if not isinstance(manager, SuggestionManager):
+        manager = SuggestionManager(hass)
+        domain_data[DATA_MANAGER] = manager
+        await manager.async_start()
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Scan after this setup returns. Scanning inline would abort the discovery
+    # flow that is in the middle of creating this entry.
+    hass.async_create_task(_scan_after_setup(manager))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Stop listening while the config entry is unloaded."""
-    unsubscribe = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    if not entry_is_link(entry):
+        return True
+
+    domain_data = hass.data.get(DOMAIN, {})
+    domain_data["link_count"] = domain_data.get("link_count", 1) - 1
+    last_link = domain_data["link_count"] <= 0
+    unsubscribe = domain_data.pop(entry.entry_id, None)
     if unsubscribe:
         unsubscribe()
-    return True
+
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    manager = domain_data.get(DATA_MANAGER)
+    if isinstance(manager, SuggestionManager):
+        manager.async_release_sensor(entry.entry_id)
+        if last_link:
+            await manager.async_stop()
+            domain_data.pop(DATA_MANAGER, None)
+    return unload_ok
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Remove only MAC connections this entry added to linked devices."""
+    if not entry_is_link(entry):
+        return
+
     registry = dr.async_get(hass)
     settings = get_entry_settings(entry)
     connection = (dr.CONNECTION_NETWORK_MAC, settings[CONF_MAC_ADDRESS])
@@ -104,3 +146,30 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 device.id,
                 new_connections=device.connections - {connection},
             )
+
+    manager = async_get_manager_if_running(hass)
+    if manager is not None:
+        await manager.async_scan()
+
+
+async def _scan_after_setup(manager: SuggestionManager) -> None:
+    """Run one scan after the config flow that created this entry has finished.
+
+    Yielding once lets the flow manager remove the discovery flow before the
+    scan looks at in-progress flows. Aborting that flow while it is still
+    returning its new entry raises UnknownFlow.
+    """
+    await asyncio.sleep(0)
+    try:
+        await manager.async_scan()
+    except Exception:
+        _LOGGER.exception("Suggestion scan failed during setup")
+
+
+def async_get_manager_if_running(hass: HomeAssistant) -> SuggestionManager | None:
+    """Return the manager without importing it again at call sites that have it."""
+    domain_data = hass.data.get(DOMAIN, {})
+    manager = domain_data.get(DATA_MANAGER)
+    if isinstance(manager, SuggestionManager):
+        return manager
+    return None

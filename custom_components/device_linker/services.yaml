@@ -1,0 +1,5 @@
+rescan_suggestions:
+  name: Rescan suggestions
+  description: >-
+    Look again for devices that share a MAC address or hardware identifier,
+    and for devices in the same area with similar names.
