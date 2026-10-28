@@ -2,35 +2,58 @@
   "config": {
     "step": {
       "user": {
-        "title": "Choose the devices",
-        "description": "Choose the device to link and the peer device that may already have its MAC address.",
+        "title": "Choose the main device",
+        "description": "Choose the device that already has the MAC address, or select manual entry. Registered MAC addresses appear next to each device.",
         "data": {
-          "device_id": "Device to link",
-          "peer_device_id": "Peer device (may have the MAC address)"
+          "main_device_id": "Main device"
         }
       },
-      "mac": {
-        "title": "Confirm or enter the MAC address",
-        "description": "Choose a MAC address registered on {peer_name}. If none is available, enter the MAC address manually for {target_name}.",
+      "devices": {
+        "title": "Choose devices to link",
+        "description": "Select all devices to link to {main_name}. You can select multiple devices.",
         "data": {
-          "selected_mac_address": "MAC address found on peer device",
+          "linked_device_ids": "Devices to link"
+        }
+      },
+      "confirm": {
+        "title": "Confirm the shared MAC address",
+        "description": "Confirm the MAC address for {main_name}. It will be added to the {device_count} selected device(s).",
+        "data": {
+          "selected_mac_address": "MAC address on the main device",
           "mac_address": "Manual MAC address"
         }
       }
     },
     "error": {
-      "device_not_found": "One of the selected devices is no longer available. Choose both devices again.",
-      "same_device": "Choose two different devices.",
-      "same_config_entry": "These devices belong to the same integration entry and cannot be linked this way. Choose devices from different integrations or entries.",
+      "device_not_found": "A selected device is no longer available. Choose the devices again.",
+      "same_config_entry": "Choose devices from different integrations. Devices from the same integration cannot share this MAC address.",
+      "no_linked_devices": "Select at least one device to link.",
       "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
-      "connection_conflict": "Another device from the target device’s integration already uses this MAC address."
+      "connection_conflict": "The MAC address is already assigned to another device from one of the selected integrations."
     },
     "abort": {
-      "already_configured": "This device and MAC address are already configured.",
-      "already_linked": "Home Assistant already links these devices through a shared identifier or connection.",
-      "device_not_found": "One of the selected devices is no longer available.",
-      "same_config_entry": "The selected devices belong to the same config entry.",
-      "not_enough_devices": "At least two devices from different config entries are needed to create a link."
+      "already_configured": "This device group and MAC address are already configured.",
+      "no_devices": "Add devices in another integration before configuring Device Linker."
+    }
+  },
+  "options": {
+    "step": {
+      "configure": {
+        "title": "Edit linked devices",
+        "description": "The main device stays the same. Update the MAC address or change the selected devices. Remove a device from the selection to unlink it; clear the selection to unlink all devices.",
+        "data": {
+          "linked_device_ids": "Devices to link",
+          "selected_mac_address": "MAC address on the main device",
+          "mac_address": "Manual MAC address"
+        }
+      }
+    },
+    "error": {
+      "device_not_found": "A selected device is no longer available. Choose the devices again.",
+      "same_config_entry": "Choose devices from different integrations. Devices from the same integration cannot share this MAC address.",
+      "no_linked_devices": "Select at least one device to link.",
+      "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
+      "connection_conflict": "The MAC address is already assigned to another device from one of the selected integrations."
     }
   }
 }

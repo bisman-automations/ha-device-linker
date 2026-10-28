@@ -1,7 +1,8 @@
 __pycache__/
 *.py[cod]
 .DS_Store
-.venv/
+.venv*/
+.venv-min/
 .pytest_cache/
 .ruff_cache/
 .coverage

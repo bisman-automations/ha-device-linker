@@ -17,7 +17,7 @@ Run the shared checks plus anything specific to this repo: in Python 3.14, insta
 ## Conventions
 
 - Config entries store the target and peer device IDs, normalized MAC address, and whether this entry added the connection.
-- The config flow only offers MAC addresses registered on the selected peer device; keep manual MAC entry as a fallback.
+- The config flow only offers MAC addresses registered on the selected peer device; keep the manual-entry/no-peer path available.
 - Keep the registry link across unload/reload; remove it only when the config entry is removed and only if this entry added it.
 - Keep `strings.json` and `translations/en.json` keys synchronized.
 - Do not put personal details or real device identifiers in this repository.

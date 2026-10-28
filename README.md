@@ -7,12 +7,12 @@
 [![Validate](https://github.com/bisman-automations/ha-device-linker/actions/workflows/validate.yml/badge.svg)](https://github.com/bisman-automations/ha-device-linker/actions/workflows/validate.yml)
 [![License](https://img.shields.io/github/license/bisman-automations/ha-device-linker)](LICENSE)
 
-Device Linker adds a shared MAC address connection to an existing Home Assistant device so Home Assistant can show a corresponding device from another integration under **Linked devices**. It links registry entries; it does not merge devices or synchronize their entities.
+Device Linker adds a shared MAC address connection to multiple selected Home Assistant devices so Home Assistant can show them together under **Linked devices**. It links registry entries; it does not merge devices or synchronize their entities.
 
 ## Requirements
 
 - Home Assistant 2026.8.0 or newer.
-- The two devices must be registered by different config entries and share a MAC address.
+- The main device and each linked device must be registered by different config entries and share a MAC address.
 
 ## Installation
 
@@ -32,9 +32,13 @@ Device Linker adds a shared MAC address connection to an existing Home Assistant
 
 [![Open your Home Assistant instance and start setting up Device Linker.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=device_linker)
 
-Select the button above, or go to **Settings > Devices & services > Add integration** and search for **Device Linker**. Choose the device you want to link and the corresponding peer device. If the peer integration has registered a MAC address in Home Assistant’s Device Registry, Device Linker offers it for confirmation. If the peer has multiple registered MAC addresses, choose the correct one. If no MAC address is registered, enter it manually. Colons and hyphens are accepted as separators.
+Select the button above, or go to **Settings > Devices & services > Add integration** and search for **Device Linker**. Choose the main device that already has the MAC address; registered MAC addresses are shown next to device names. Or select **Manual MAC entry** if the address is not registered. Next, select one or more devices to link, then confirm the MAC address. You can enter a MAC manually at confirmation. Colons and hyphens are accepted as separators.
 
-Home Assistant requires a connection to be unique within a config entry, so the two devices must belong to different config entries. If another device in the target device’s config entry already uses the MAC address, choose a different MAC or target device. If both devices already share a registry identifier or connection, Home Assistant already considers them linked.
+Home Assistant requires a connection to be unique within a config entry, so the main device and each linked device must belong to different config entries. Device Linker also requires selected linked devices to come from separate config entries. If a device from one of the selected integrations already uses the MAC address, choose a different MAC or device.
+
+## Editing and unlinking
+
+Open a Device Linker entry under **Settings > Devices & services > Integrations**, then choose **Configure**. The main device stays fixed; change the MAC address or linked-device selection. Remove a device from the selection to unlink it; clearing the selection unlinks all devices. Device Linker removes only MAC connections it added itself.
 
 ## Troubleshooting
 
