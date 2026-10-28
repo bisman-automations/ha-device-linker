@@ -39,7 +39,7 @@ Paths under `custom_components/device_linker/` unless noted.
 - **Suggestions.** `matching.suggest` ranks MAC matches, then other hardware identifiers, then same-area name similarity. Default threshold is 0.8 (`DEFAULT_SUGGESTION_THRESHOLD`), edited in the options flow (number selector, 0.5 to 1, step 0.05) and stored for the whole integration in `device_linker.suggestions`, along with the two signal switches and dismissed unique ids. Dismissal is permanent. Discovery flows are capped at 10; the sensor and diagnostics list up to 25. Registry updates debounce for 2 seconds. A device that already shares a network-MAC or Bluetooth connection is already linked and is not suggested. Devices from `device_linker` itself are not candidates.
 - **Support Home Assistant 2026.8 and newer** (`hacs.json`). Do not lower that minimum without retesting device-registry connections on the older release. `requirements_test_min.txt` pins the newest pytest-homeassistant-custom-component release of 2026.8.
 - `strings.json` and `translations/en.json` must be identical.
-- `manifest.json` keys: `domain`, `name`, then alphabetical (hassfest). `issue_tracker` is the GitHub issues URL.
+- `manifest.json` keys: `domain`, `name`, then alphabetical (hassfest). `issue_tracker` is the GitHub issues URL. Do not put `homeassistant` in the manifest: hassfest rejects that key. The minimum version lives in `hacs.json`.
 
 ## Checks
 

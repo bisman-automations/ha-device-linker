@@ -6,8 +6,7 @@
   ],
   "config_flow": true,
   "documentation": "https://github.com/bisman-automations/ha-device-linker",
-  "homeassistant": "2026.8.0",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/bisman-automations/ha-device-linker/issues",
-  "version": "1.2.0"
+  "version": "1.2.1"
 }
