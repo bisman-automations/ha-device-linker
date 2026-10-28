@@ -147,6 +147,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         errors: dict[str, str] = {}
+        conflicting_devices: list[str] = []
         if user_input is not None:
             mac_address = self._submitted_mac(user_input)
             if not mac_address or not MAC_PATTERN.fullmatch(mac_address):
@@ -154,7 +155,10 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 mac_address = dr.format_mac(mac_address)
                 connection = (dr.CONNECTION_NETWORK_MAC, mac_address)
-                if self._has_connection_conflict(registry, linked_devices, connection):
+                conflicting_devices = self._connection_conflicts(
+                    registry, linked_devices, connection
+                )
+                if conflicting_devices:
                     errors["base"] = "connection_conflict"
                 else:
                     await self.async_set_unique_id(
@@ -180,8 +184,16 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=self._mac_schema(discovered_macs),
             errors=errors,
             description_placeholders={
-                "main_name": self._display_name(main) if main else "Manual entry",
+                "main_name": (
+                    DeviceLinkerConfigFlow._display_name(main)
+                    if main
+                    else "Manual entry"
+                ),
                 "device_count": str(len(linked_devices)),
+                "linked_device_names": ", ".join(
+                    self._device_labels(self.hass, linked_devices)
+                ),
+                "conflicting_devices": ", ".join(conflicting_devices) or "none",
             },
         )
 
@@ -216,23 +228,37 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             schema[vol.Required(CONF_MAC_ADDRESS)] = str
         return vol.Schema(schema)
 
-    def _has_connection_conflict(self, registry, devices, connection) -> bool:
-        """Check conflicts within each integration and across chosen devices."""
-        seen_config_entries: set[str] = set()
+    def _connection_conflicts(self, registry, devices, connection) -> list[str]:
+        """Return the exact devices causing MAC uniqueness conflicts."""
+        conflicts: set[str] = set()
+        selected_by_config_entry = {}
         for device in devices:
             if device is None:
-                return True
-            if device.config_entry_id in seen_config_entries:
-                return True
-            seen_config_entries.add(device.config_entry_id)
-            if any(
-                other.id != device.id and connection in other.connections
-                for other in dr.async_entries_for_config_entry(
-                    registry, device.config_entry_id
+                continue
+            prior_selected = selected_by_config_entry.get(device.config_entry_id)
+            if prior_selected is not None:
+                conflicts.update(
+                    self._device_labels(self.hass, [prior_selected, device])
                 )
+            selected_by_config_entry[device.config_entry_id] = device
+            for other in dr.async_entries_for_config_entry(
+                registry, device.config_entry_id
             ):
-                return True
-        return False
+                if other.id != device.id and connection in other.connections:
+                    conflicts.update(self._device_labels(self.hass, [other]))
+        return sorted(conflicts, key=str.casefold)
+
+    @classmethod
+    def _device_labels(cls, hass, devices) -> list[str]:
+        """Return device names with their integration domains."""
+        labels = []
+        for device in devices:
+            if device is None:
+                continue
+            config_entry = hass.config_entries.async_get_entry(device.config_entry_id)
+            integration_name = config_entry.domain if config_entry else "unknown"
+            labels.append(cls._device_label(device, integration_name, False))
+        return labels
 
     @staticmethod
     def _entry_title(main, linked_devices) -> str:
@@ -275,7 +301,9 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             options.append(
                 selector.SelectOptionDict(
                     value=device.id,
-                    label=self._device_label(device, config_entry.domain, include_mac),
+                    label=DeviceLinkerConfigFlow._device_label(
+                        device, config_entry.domain, include_mac
+                    ),
                 )
             )
         return sorted(options, key=lambda option: option["label"].casefold())
@@ -338,6 +366,7 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
             if device_id in available_ids
         ]
         errors: dict[str, str] = {}
+        conflicting_devices: list[str] = []
         if user_input is not None:
             linked_ids = list(dict.fromkeys(user_input[CONF_LINKED_DEVICE_IDS]))
             mac_address = DeviceLinkerConfigFlow._submitted_mac(user_input)
@@ -355,9 +384,10 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
             else:
                 mac_address = dr.format_mac(mac_address)
                 connection = (dr.CONNECTION_NETWORK_MAC, mac_address)
-                if self._conflict_in_edit(
+                conflicting_devices = self._conflicts_in_edit(
                     registry, devices, connection, old_linked_ids, old[CONF_MAC_ADDRESS]
-                ):
+                )
+                if conflicting_devices:
                     errors["base"] = "connection_conflict"
                 else:
                     added_connections = self._reconcile_registry(
@@ -430,32 +460,56 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
             data_schema=vol.Schema(schema),
             errors=errors,
             description_placeholders={
-                "main_name": self._display_name(main) if main else "Manual entry"
+                "main_name": (
+                    DeviceLinkerConfigFlow._display_name(main)
+                    if main
+                    else "Manual entry"
+                ),
+                "linked_device_names": ", ".join(
+                    DeviceLinkerConfigFlow._device_labels(
+                        self.hass,
+                        [
+                            get_device(registry, device_id)
+                            for device_id in old_linked_ids
+                        ],
+                    )
+                ),
+                "conflicting_devices": ", ".join(conflicting_devices) or "none",
             },
         )
 
-    def _conflict_in_edit(
+    def _conflicts_in_edit(
         self, registry, devices, connection, old_linked_ids, old_mac
-    ) -> bool:
-        """Check conflicts while allowing this entry's existing assignments."""
+    ) -> list[str]:
+        """Find conflicts while allowing this entry's existing assignments."""
         selected_ids = {device.id for device in devices if device is not None}
         if len(selected_ids) != len(devices):
-            return True
-        config_entry_ids: set[str] = set()
+            return ["A selected device is no longer available"]
+        conflicts: set[str] = set()
+        selected_by_config_entry = {}
         for device in devices:
-            if device is None or device.config_entry_id in config_entry_ids:
-                return True
-            config_entry_ids.add(device.config_entry_id)
-            if any(
-                other.id != device.id
-                and connection in other.connections
-                and not (other.id in old_linked_ids and old_mac == connection[1])
-                for other in dr.async_entries_for_config_entry(
-                    registry, device.config_entry_id
+            if device is None:
+                continue
+            prior_selected = selected_by_config_entry.get(device.config_entry_id)
+            if prior_selected is not None:
+                conflicts.update(
+                    DeviceLinkerConfigFlow._device_labels(
+                        self.hass, [prior_selected, device]
+                    )
                 )
+            selected_by_config_entry[device.config_entry_id] = device
+            for other in dr.async_entries_for_config_entry(
+                registry, device.config_entry_id
             ):
-                return True
-        return False
+                if (
+                    other.id != device.id
+                    and connection in other.connections
+                    and not (other.id in old_linked_ids and old_mac == connection[1])
+                ):
+                    conflicts.update(
+                        DeviceLinkerConfigFlow._device_labels(self.hass, [other])
+                    )
+        return sorted(conflicts, key=str.casefold)
 
     def _reconcile_registry(
         self, registry, old, linked_ids, devices, mac_address

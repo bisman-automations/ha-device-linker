@@ -17,7 +17,7 @@
       },
       "confirm": {
         "title": "Confirm the shared MAC address",
-        "description": "Confirm the MAC address for {main_name}. It will be added to the {device_count} selected device(s).",
+        "description": "Selected devices: {linked_device_names}. Confirm the MAC address for {main_name}; it will be added to all selected devices.",
         "data": {
           "selected_mac_address": "MAC address on the main device",
           "mac_address": "Manual MAC address"
@@ -29,7 +29,7 @@
       "same_config_entry": "Choose devices from different integrations. Devices from the same integration cannot share this MAC address.",
       "no_linked_devices": "Select at least one device to link.",
       "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
-      "connection_conflict": "The MAC address is already assigned to another device from one of the selected integrations."
+      "connection_conflict": "The MAC address is already assigned to {conflicting_devices}. Select a different MAC address or remove the conflicting device."
     },
     "abort": {
       "already_configured": "This device group and MAC address are already configured.",
@@ -40,7 +40,7 @@
     "step": {
       "configure": {
         "title": "Edit linked devices",
-        "description": "The main device stays the same. Update the MAC address or change the selected devices. Remove a device from the selection to unlink it; clear the selection to unlink all devices.",
+        "description": "The main device stays the same. Currently selected devices: {linked_device_names}. Update the MAC address or change the selection. Remove a device to unlink it; clear the selection to unlink all devices.",
         "data": {
           "linked_device_ids": "Devices to link",
           "selected_mac_address": "MAC address on the main device",
@@ -53,7 +53,7 @@
       "same_config_entry": "Choose devices from different integrations. Devices from the same integration cannot share this MAC address.",
       "no_linked_devices": "Select at least one device to link.",
       "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
-      "connection_conflict": "The MAC address is already assigned to another device from one of the selected integrations."
+      "connection_conflict": "The MAC address is already assigned to {conflicting_devices}. Select a different MAC address or remove the conflicting device."
     }
   }
 }
