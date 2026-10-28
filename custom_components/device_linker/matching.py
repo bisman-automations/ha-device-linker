@@ -2,6 +2,7 @@
 
 This module does not import Home Assistant. The manager normalizes registry
 entries into :class:`DeviceView` and asks :func:`suggest` for the ranked list.
+:func:`plan_auto_links` turns the strong matches into one group per anchor.
 
 Two tiers:
 
@@ -11,24 +12,40 @@ Two tiers:
   the Shelly, ESPHome, or TV integration for the same hardware often live in
   different areas. An identifier match (Zigbee IEEE, Bluetooth MAC stored as
   an identifier, or a serial number) is next.
-* **Name** (lower confidence). Devices in the *same* area whose names still
-  look alike after case, punctuation, the area name, generic words (``light``,
-  ``switch``, ``sensor``, ``plug``), and common brand names are removed.
-  Similarity is a token-set score from :mod:`difflib` (no extra dependency)
-  and has to reach the configured threshold.
+* **Name** (lower confidence). Similar names, after case, punctuation, the
+  area name, generic words (``light``, ``switch``, ``sensor``, ``plug``), and
+  common brand names are removed. Area names are removed as whole words, so
+  an area called Room does not change "bedroom". A missing area is compatible
+  with every area: UniFi clients are often unassigned, and requiring both
+  devices to share an area dropped those pairs. Two assigned areas still have
+  to match. An exact folded name always scores 1, even when the
+  distinctive-word pass would leave nothing. Fuzzy similarity is a token-set
+  score from :mod:`difflib` (no extra dependency) and has to reach the
+  configured threshold.
+
+  Automatic linking is stricter than suggesting. A fuzzy name is linked only
+  when the devices share at least two distinctive words, they are in the same
+  area, and the score reaches the automatic threshold. One shared word
+  ("North window" and "North porch") stays a suggestion. When either device
+  has no area, only a multi-word exact name is linked automatically, so a
+  bare "TV" is not attached to every TV. A MAC this integration copied onto
+  a device is ignored when choosing the anchor. Fuzzy comparisons skip pairs
+  where neither device has a network MAC, except two devices in the same
+  area, which are still suggested.
 
 Pairs are skipped when they are the same device, share a config entry, are
-already linked, or were dismissed.
+already linked, or were dismissed or unlinked.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 import re
 
-from .const import REASON_IDENTIFIER, REASON_MAC, REASON_NAME
+from .const import MAX_AUTO_LINK_GROUP, REASON_IDENTIFIER, REASON_MAC, REASON_NAME
 
 # Connection type strings. Duplicated here so this module stays free of
 # Home Assistant imports; they match device_registry.CONNECTION_*.
@@ -117,6 +134,7 @@ _BRAND_TOKENS = frozenset(
         "sengled",
         "shelly",
         "sonoff",
+        "sonos",
         "sony",
         "switchbot",
         "tapo",
@@ -162,9 +180,21 @@ class Suggestion:
     score: float
     area_name_a: str | None
     area_name_b: str | None
-    # Normalized MAC to add, when the match produced one. Name and serial
-    # matches leave this empty and the confirm step asks for an address.
+    # Normalized MAC to add, when the match produced one. Name matches set
+    # this only when exactly one device has exactly one network MAC, so that
+    # device can be the anchor. Otherwise the confirm step asks for an address.
     mac: str | None
+    # Device that already has the network MAC. None when the address is
+    # ambiguous or neither device has it.
+    anchor_device_id: str | None = None
+    # True when the folded names are equal. Fuzzy matches leave this false
+    # even when the score is 1 (one name's tokens are a subset of the other).
+    exact: bool = False
+    # Distinctive words shared by the two names after the area, brands, and
+    # generic words are removed. Automatic linking of a fuzzy name needs two.
+    shared_tokens: int = 0
+    config_entry_id_a: str | None = None
+    config_entry_id_b: str | None = None
 
     @property
     def key(self) -> str:
@@ -187,6 +217,8 @@ class Suggestion:
             ),
             "reason": self.reason,
             "score": round(self.score, 2),
+            "exact": self.exact,
+            "shared_tokens": self.shared_tokens,
             "area_mismatch": self.area_mismatch,
             "areas": [
                 self.area_name_a or "Unassigned",
@@ -230,44 +262,85 @@ def normalize_mac(value: str) -> str | None:
     return None
 
 
+def fold_name(name: str) -> str:
+    """Return a name folded for an exact comparison.
+
+    Case and punctuation are folded and whitespace is collapsed. The area,
+    generic words, and brand names stay in the string, so two devices that
+    really have the same name still compare equal after those words are
+    removed from the fuzzy score.
+    """
+    text = _PUNCTUATION.sub(" ", name.casefold().replace("_", " "))
+    return " ".join(text.split())
+
+
+def area_tokens(area_name: str | None) -> set[str]:
+    """Words of an area name. Matching ignores these as whole tokens.
+
+    "Room" removes the token ``room``. It does not rewrite ``bedroom`` or
+    ``bathroom``, which a substring replace would damage.
+    """
+    if not area_name:
+        return set()
+    area = _PUNCTUATION.sub(" ", area_name.casefold().replace("_", " "))
+    return {token for token in area.split() if token}
+
+
 def normalize_name(name: str, area_name: str | None) -> str:
     """Return the distinctive words of a device name.
 
-    Case and punctuation are folded, then the area name, generic device
-    words, and brand names are removed. An empty result means the name was
-    only an area plus generic words, which is not enough to suggest a link.
+    Case and punctuation are folded, then area words, generic device words,
+    and brand names are removed as whole tokens. An empty result means the
+    name was only an area plus generic words. That is not enough for a
+    *fuzzy* match. An exact :func:`fold_name` match still qualifies.
     """
     text = _PUNCTUATION.sub(" ", name.casefold().replace("_", " "))
-    area_tokens: set[str] = set()
-    if area_name:
-        area = _PUNCTUATION.sub(" ", area_name.casefold().replace("_", " "))
-        area = " ".join(area.split())
-        if area:
-            text = text.replace(area, " ")
-            area_tokens = set(area.split())
+    ignored = area_tokens(area_name)
     tokens = [
         token
         for token in text.split()
         if token not in _GENERIC_TOKENS
         and token not in _BRAND_TOKENS
-        and token not in area_tokens
+        and token not in ignored
         and not token.isdigit()
     ]
     return " ".join(tokens)
 
 
-def name_similarity(name_a: str, name_b: str, area_name: str | None) -> float:
-    """Score two names from 0 to 1 after :func:`normalize_name`.
+def shared_distinctive_tokens(name_a: str, name_b: str, area_name: str | None) -> int:
+    """How many distinctive words the two names have in common."""
+    left = set(normalize_name(name_a, area_name).split())
+    right = set(normalize_name(name_b, area_name).split())
+    if not left or not right:
+        return 0
+    return len(left & right)
 
-    The score is the best of a plain ratio and a token-set ratio. Token-set
-    treats "ceiling tablet" and "tablet ceiling speaker" as a strong match
-    because the shared words dominate and the extra word only trims the score.
+
+def name_similarity(name_a: str, name_b: str, area_name: str | None) -> float:
+    """Score two names from 0 to 1.
+
+    Equal folded names score 1. Otherwise the score is the best of a plain
+    ratio and a token-set ratio of :func:`normalize_name`. Token-set treats
+    "ceiling tablet" and "tablet ceiling speaker" as a strong match because
+    the shared words dominate and the extra word only trims the score. A
+    folded name that survives as nothing on either side scores 0 unless the
+    folded names were equal.
     """
+    score, _exact = _name_score(name_a, name_b, area_name)
+    return score
+
+
+def _name_score(name_a: str, name_b: str, area_name: str | None) -> tuple[float, bool]:
+    """Return ``(score, exact)`` for two device names."""
+    folded_a = fold_name(name_a)
+    folded_b = fold_name(name_b)
+    if folded_a and folded_a == folded_b:
+        return 1.0, True
     left = normalize_name(name_a, area_name)
     right = normalize_name(name_b, area_name)
     if not left or not right:
-        return 0.0
-    return max(_ratio(left, right), _token_set_ratio(left, right))
+        return 0.0, False
+    return max(_ratio(left, right), _token_set_ratio(left, right)), False
 
 
 def hardware_keys(
@@ -298,11 +371,17 @@ def suggest(
     threshold: float,
     match_hardware: bool = True,
     match_names: bool = True,
+    copied_macs: set[tuple[str, str]] | None = None,
 ) -> list[Suggestion]:
     """Return suggestions, best first.
 
     Hardware matches outrank name matches. Within a tier, a higher score wins.
+
+    ``copied_macs`` is the set of ``(device id, normalized mac)`` pairs that
+    Device Linker itself added. Those connections still count as a link the
+    devices already share, but they are not an anchor for a new match.
     """
+    copied = copied_macs or set()
     eligible = [device for device in devices if device.config_entry_id]
     by_key: dict[tuple[str, str], list[tuple[DeviceView, str | None]]] = {}
     if match_hardware:
@@ -326,36 +405,265 @@ def suggest(
                     mac = left_mac or right_mac
                     _consider(
                         best,
-                        _suggestion(left, right, reason=reason, score=1.0, mac=mac),
-                    )
-
-    if match_names:
-        by_area: dict[str, list[DeviceView]] = {}
-        for device in eligible:
-            if device.area_id:
-                by_area.setdefault(device.area_id, []).append(device)
-        for group in by_area.values():
-            area_name = group[0].area_name
-            for index, left in enumerate(group):
-                for right in group[index + 1 :]:
-                    if not _pair_allowed(left, right, linked_pairs, dismissed):
-                        continue
-                    if pair_key(left.device_id, right.device_id) in best:
-                        # A hardware match for this pair is already the better tier.
-                        continue
-                    if _already_share_connection(left, right):
-                        continue
-                    score = name_similarity(left.name, right.name, area_name)
-                    if score < threshold:
-                        continue
-                    _consider(
-                        best,
                         _suggestion(
-                            left, right, reason=REASON_NAME, score=score, mac=None
+                            left,
+                            right,
+                            reason=reason,
+                            score=1.0,
+                            mac=mac,
+                            anchor_device_id=_hardware_anchor(left, right, mac, copied),
                         ),
                     )
 
+    if match_names:
+        _match_names(
+            eligible,
+            best,
+            linked_pairs=linked_pairs,
+            dismissed=dismissed,
+            threshold=threshold,
+            copied_macs=copied,
+        )
+
     return sorted(best.values(), key=_sort_key)
+
+
+def _match_names(
+    devices: Sequence[DeviceView],
+    best: dict[str, Suggestion],
+    *,
+    linked_pairs: set[str],
+    dismissed: set[str],
+    threshold: float,
+    copied_macs: set[tuple[str, str]],
+) -> None:
+    """Add name suggestions.
+
+    Exact folded names are grouped first, which is the UniFi case: the client
+    and the television integration share a name, and the client often has no
+    area. Fuzzy pairs are limited to devices that share a distinctive token
+    so a large registry is not a full pairwise comparison. A fuzzy pair where
+    neither device has a network MAC is compared only when both are in the
+    same area. That keeps "ceiling light" and "ceiling" in one room as a
+    suggestion, and skips the cross product of every unaddressed device.
+    """
+    by_fold: dict[str, list[DeviceView]] = defaultdict(list)
+    for device in devices:
+        folded = fold_name(device.name)
+        if folded:
+            by_fold[folded].append(device)
+    for group in by_fold.values():
+        for index, left in enumerate(group):
+            for right in group[index + 1 :]:
+                _consider_name(
+                    best,
+                    left,
+                    right,
+                    linked_pairs=linked_pairs,
+                    dismissed=dismissed,
+                    threshold=threshold,
+                    known_exact=True,
+                    copied_macs=copied_macs,
+                )
+
+    has_mac = {
+        device.device_id for device in devices if _network_macs(device.connections)
+    }
+    token_index: dict[str, list[DeviceView]] = defaultdict(list)
+    for device in devices:
+        # Index the words before the area is removed so a device with no area
+        # still meets one whose area name is part of the title.
+        for token in normalize_name(device.name, None).split():
+            token_index[token].append(device)
+    seen: set[str] = set()
+    for holders in token_index.values():
+        if len(holders) < 2:
+            continue
+        for index, left in enumerate(holders):
+            for right in holders[index + 1 :]:
+                key = pair_key(left.device_id, right.device_id)
+                if key in seen or key in best:
+                    continue
+                seen.add(key)
+                # Neither side has an address to copy. Still suggest a pair
+                # that shares an area; skip every other combination.
+                if left.device_id not in has_mac and right.device_id not in has_mac:
+                    if not left.area_id or left.area_id != right.area_id:
+                        continue
+                _consider_name(
+                    best,
+                    left,
+                    right,
+                    linked_pairs=linked_pairs,
+                    dismissed=dismissed,
+                    threshold=threshold,
+                    known_exact=False,
+                    copied_macs=copied_macs,
+                )
+
+
+def _consider_name(
+    best: dict[str, Suggestion],
+    left: DeviceView,
+    right: DeviceView,
+    *,
+    linked_pairs: set[str],
+    dismissed: set[str],
+    threshold: float,
+    known_exact: bool,
+    copied_macs: set[tuple[str, str]],
+) -> None:
+    """Score one area-compatible name pair and keep it when it qualifies."""
+    if not _areas_compatible(left, right):
+        return
+    if not _pair_allowed(left, right, linked_pairs, dismissed):
+        return
+    if pair_key(left.device_id, right.device_id) in best:
+        return
+    if _already_share_connection(left, right):
+        return
+    area_name = _shared_area_name(left, right)
+    if known_exact:
+        score, exact = 1.0, True
+    else:
+        score, exact = _name_score(left.name, right.name, area_name)
+        if score < threshold:
+            return
+    anchor_id, mac = _name_anchor(left, right, copied_macs)
+    _consider(
+        best,
+        _suggestion(
+            left,
+            right,
+            reason=REASON_NAME,
+            score=score,
+            mac=mac,
+            anchor_device_id=anchor_id,
+            exact=exact,
+            shared_tokens=shared_distinctive_tokens(left.name, right.name, area_name),
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AutoLinkPlan:
+    """Several devices that should share one anchor's MAC on one entry."""
+
+    anchor_device_id: str
+    anchor_name: str
+    anchor_integration: str
+    anchor_config_entry_id: str | None
+    mac: str
+    linked_device_ids: tuple[str, ...]
+    linked_names: tuple[str, ...]
+    linked_integrations: tuple[str, ...]
+    reason: str
+    score: float
+    exact: bool
+
+
+def plan_auto_links(
+    suggestions: Sequence[Suggestion],
+    *,
+    enabled: bool,
+    threshold: float,
+) -> list[AutoLinkPlan]:
+    """Group matches that should be linked without asking.
+
+    Hardware matches are included whenever ``enabled`` is set and the anchor
+    MAC is unambiguous. An exact name is included too, except a one-word
+    exact name when either device has no area (a bare "TV"). A fuzzy name is
+    included when the devices are both assigned to the same area, they share
+    at least two distinctive words, and the score reaches ``threshold``.
+    Each plan is one anchor device plus the MAC already on it. A device is
+    attached to at most one plan, and at most :data:`MAX_AUTO_LINK_GROUP`
+    devices, so the rest stay suggestions.
+    """
+    if not enabled:
+        return []
+    buckets: dict[tuple[str, str], list[Suggestion]] = defaultdict(list)
+    for item in suggestions:
+        if item.anchor_device_id and item.mac and _auto_eligible(item, threshold):
+            buckets[(item.anchor_device_id, item.mac)].append(item)
+
+    claimed: set[str] = set()
+    plans: list[AutoLinkPlan] = []
+    for anchor_id, mac in sorted(buckets, key=lambda key: _bucket_rank(buckets[key])):
+        items = sorted(buckets[(anchor_id, mac)], key=_sort_key)
+        anchor_name = ""
+        anchor_integration = ""
+        anchor_entry: str | None = None
+        linked_ids: list[str] = []
+        linked_names: list[str] = []
+        linked_integrations: list[str] = []
+        used_entries: set[str | None] = set()
+        best_item = items[0]
+        for item in items:
+            other = _linked_end(item, anchor_id)
+            if other is None:
+                continue
+            other_id, other_name, other_integration, other_entry = other
+            if not anchor_name:
+                anchor_name, anchor_integration, anchor_entry = _anchor_end(
+                    item, anchor_id
+                )
+                if anchor_entry is not None:
+                    used_entries.add(anchor_entry)
+            if other_id in claimed or other_id == anchor_id:
+                continue
+            if other_entry is None or other_entry in used_entries:
+                continue
+            if len(linked_ids) >= MAX_AUTO_LINK_GROUP:
+                continue
+            used_entries.add(other_entry)
+            claimed.add(other_id)
+            linked_ids.append(other_id)
+            linked_names.append(other_name)
+            linked_integrations.append(other_integration)
+        if not linked_ids:
+            continue
+        plans.append(
+            AutoLinkPlan(
+                anchor_device_id=anchor_id,
+                anchor_name=anchor_name,
+                anchor_integration=anchor_integration,
+                anchor_config_entry_id=anchor_entry,
+                mac=mac,
+                linked_device_ids=tuple(linked_ids),
+                linked_names=tuple(linked_names),
+                linked_integrations=tuple(linked_integrations),
+                reason=best_item.reason,
+                score=best_item.score,
+                exact=any(
+                    item.exact for item in items if _links_device(item, linked_ids)
+                ),
+            )
+        )
+    return plans
+
+
+def pairs_among(main_device_id: str | None, device_ids: Sequence[str]) -> set[str]:
+    """Every unordered pair inside a link entry."""
+    ids = [device_id for device_id in device_ids if device_id]
+    pairs: set[str] = set()
+    if main_device_id:
+        for device_id in ids:
+            if device_id != main_device_id:
+                pairs.add(pair_key(main_device_id, device_id))
+    for index, left in enumerate(ids):
+        for right in ids[index + 1 :]:
+            pairs.add(pair_key(left, right))
+    return pairs
+
+
+def pairs_touching(removed_ids: Sequence[str], other_ids: Sequence[str]) -> set[str]:
+    """Pairs between devices that were removed and the devices they left."""
+    pairs: set[str] = set()
+    for removed in removed_ids:
+        for other in other_ids:
+            if other and other != removed:
+                pairs.add(pair_key(removed, other))
+    return pairs
 
 
 def choose_link_ends(
@@ -372,14 +680,159 @@ def choose_link_ends(
     or the user typed it), both devices are linked from a manual main so each
     of them gains the connection and Home Assistant can show the link.
     """
-    wanted = (CONNECTION_NETWORK_MAC, mac)
-    a_has = wanted in set(connections_a)
-    b_has = wanted in set(connections_b)
+    a_has = mac in _network_macs(connections_a)
+    b_has = mac in _network_macs(connections_b)
     if a_has and not b_has:
         return device_a_id, [device_b_id]
     if b_has and not a_has:
         return device_b_id, [device_a_id]
     return None, [device_a_id, device_b_id]
+
+
+def _areas_compatible(left: DeviceView, right: DeviceView) -> bool:
+    """Return whether these devices may be matched on name.
+
+    A missing area matches any area, including another missing area. UniFi
+    often leaves the client unassigned while the other integration files the
+    same device in a room. Two different assigned areas do not match.
+    """
+    if left.area_id is None or right.area_id is None:
+        return True
+    return left.area_id == right.area_id
+
+
+def _shared_area_name(left: DeviceView, right: DeviceView) -> str | None:
+    """Area name to strip, when exactly one area or one shared area is known."""
+    if left.area_id and right.area_id and left.area_id == right.area_id:
+        return left.area_name or right.area_name
+    if left.area_id and not right.area_id:
+        return left.area_name
+    if right.area_id and not left.area_id:
+        return right.area_name
+    return None
+
+
+def _hardware_anchor(
+    left: DeviceView,
+    right: DeviceView,
+    mac: str | None,
+    copied_macs: set[tuple[str, str]],
+) -> str | None:
+    """Return the device that already had ``mac``, ignoring copied addresses.
+
+    A connection Device Linker added is recorded in ``copied_macs`` and does
+    not make that device the anchor of a later match.
+    """
+    if not mac:
+        return None
+    left_has = mac in _native_network_macs(left, copied_macs)
+    right_has = mac in _native_network_macs(right, copied_macs)
+    if left_has and not right_has:
+        return left.device_id
+    if right_has and not left_has:
+        return right.device_id
+    return None
+
+
+def _name_anchor(
+    left: DeviceView,
+    right: DeviceView,
+    copied_macs: set[tuple[str, str]],
+) -> tuple[str | None, str | None]:
+    """Return ``(device id, mac)`` when exactly one side has one network MAC.
+
+    MACs this integration copied on are ignored, so the device that originally
+    had the address stays the anchor. Two different addresses, several
+    addresses on one device, or no address at all is left for the user to
+    confirm.
+    """
+    left_macs = _native_network_macs(left, copied_macs)
+    right_macs = _native_network_macs(right, copied_macs)
+    if len(left_macs) == 1 and not right_macs:
+        return left.device_id, next(iter(left_macs))
+    if len(right_macs) == 1 and not left_macs:
+        return right.device_id, next(iter(right_macs))
+    return None, None
+
+
+def _native_network_macs(
+    device: DeviceView, copied_macs: set[tuple[str, str]]
+) -> set[str]:
+    """Network MACs on ``device`` that Device Linker did not copy there."""
+    return {
+        mac
+        for mac in _network_macs(device.connections)
+        if (device.device_id, mac) not in copied_macs
+    }
+
+
+def _network_macs(connections: Iterable[tuple[str, str]]) -> set[str]:
+    found: set[str] = set()
+    for connection_type, value in connections:
+        if connection_type != CONNECTION_NETWORK_MAC:
+            continue
+        mac = normalize_mac(value)
+        if mac is not None:
+            found.add(mac)
+    return found
+
+
+def _auto_eligible(item: Suggestion, threshold: float) -> bool:
+    """Return whether this match is strong enough to link on its own.
+
+    Hardware matches are included. An exact name is included, but a one-word
+    exact name is not when either device has no area. A fuzzy name needs two
+    shared distinctive words, both devices assigned to the same area, and a
+    score at the automatic threshold. One shared word stays a suggestion.
+    """
+    if item.reason in {REASON_MAC, REASON_IDENTIFIER}:
+        return True
+    if item.reason != REASON_NAME:
+        return False
+    unassigned = item.area_name_a is None or item.area_name_b is None
+    if item.exact:
+        if unassigned and len(fold_name(item.name_a).split()) < 2:
+            return False
+        return True
+    if unassigned or item.shared_tokens < 2:
+        return False
+    return item.score >= threshold
+
+
+def _bucket_rank(items: Sequence[Suggestion]) -> tuple[int, float, str, str]:
+    return _sort_key(min(items, key=_sort_key))
+
+
+def _anchor_end(item: Suggestion, anchor_id: str) -> tuple[str, str, str | None]:
+    if item.device_id_a == anchor_id:
+        return item.name_a, item.integration_a, item.config_entry_id_a
+    return item.name_b, item.integration_b, item.config_entry_id_b
+
+
+def _linked_end(
+    item: Suggestion, anchor_id: str
+) -> tuple[str, str, str, str | None] | None:
+    if item.anchor_device_id != anchor_id:
+        return None
+    if item.device_id_a == anchor_id:
+        return (
+            item.device_id_b,
+            item.name_b,
+            item.integration_b,
+            item.config_entry_id_b,
+        )
+    if item.device_id_b == anchor_id:
+        return (
+            item.device_id_a,
+            item.name_a,
+            item.integration_a,
+            item.config_entry_id_a,
+        )
+    return None
+
+
+def _links_device(item: Suggestion, linked_ids: Sequence[str]) -> bool:
+    return item.device_id_a in linked_ids or item.device_id_b in linked_ids
 
 
 def _colon_join(bare_hex: str) -> str:
@@ -497,6 +950,9 @@ def _suggestion(
     reason: str,
     score: float,
     mac: str | None,
+    anchor_device_id: str | None = None,
+    exact: bool = False,
+    shared_tokens: int = 0,
 ) -> Suggestion:
     ordered = tuple(sorted((left, right), key=lambda device: device.device_id))
     first, second = ordered
@@ -512,6 +968,11 @@ def _suggestion(
         area_name_a=first.area_name,
         area_name_b=second.area_name,
         mac=mac,
+        anchor_device_id=anchor_device_id,
+        exact=exact,
+        shared_tokens=shared_tokens,
+        config_entry_id_a=first.config_entry_id,
+        config_entry_id_b=second.config_entry_id,
     )
 
 

@@ -2,4 +2,11 @@ rescan_suggestions:
   name: Rescan suggestions
   description: >-
     Look again for devices that share a MAC address or hardware identifier,
-    and for devices in the same area with similar names.
+    or that have the same or a similar name. Strong matches are linked
+    automatically when that option is on.
+
+reset_dismissed:
+  name: Reset dismissed and unlinked
+  description: >-
+    Forget ignored suggestions and devices you unlinked, then look again.
+    Pairs you had separated can be linked automatically once more.

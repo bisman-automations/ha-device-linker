@@ -41,7 +41,7 @@
       },
       "discovery_name": {
         "title": "Link {device_a} with {device_b}?",
-        "description": "These devices are in the same area and their names are similar ({score}). {device_a} ({integration_a}) and {device_b} ({integration_b}), area {area_a}.",
+        "description": "These names are similar ({score}). A device with no area is still included, so an unassigned UniFi client can match a device in a room. Different areas are not matched. {device_a} ({integration_a}) is in {area_a}. {device_b} ({integration_b}) is in {area_b}.",
         "data": {
           "selected_mac_address": "MAC address",
           "mac_address": "Manual MAC address"
@@ -65,14 +65,16 @@
     "step": {
       "configure": {
         "title": "Edit linked devices",
-        "description": "The main device stays the same. Currently selected devices: {linked_device_names}. Update the MAC address or change the selection. Remove a device to unlink it; clear the selection to unlink all devices. Suggestion settings at the bottom apply to every Device Linker entry.",
+        "description": "The main device stays the same. Currently selected devices: {linked_device_names}. Update the MAC address or change the selection. Remove a device to unlink it; clear the selection to unlink all devices. A device you remove is not linked again until you reset dismissed and unlinked devices. Automatic linking uses a full name, or two shared words in the same area. A single shared word stays a suggestion. A device with no area is linked automatically only when the whole name matches and it is more than one word. The settings at the bottom apply to every Device Linker entry.",
         "data": {
           "linked_device_ids": "Devices to link",
           "selected_mac_address": "MAC address on the main device",
           "mac_address": "Manual MAC address",
-          "suggestion_threshold": "Name similarity",
-          "match_hardware": "Suggest MAC and identifier matches",
-          "match_names": "Suggest similar names in the same area"
+          "auto_link": "Link strong matches automatically",
+          "auto_link_threshold": "Automatic name similarity",
+          "suggestion_threshold": "Name similarity for suggestions",
+          "match_hardware": "Match MAC addresses and hardware identifiers",
+          "match_names": "Match similar names"
         }
       }
     },
@@ -94,7 +96,17 @@
   "services": {
     "rescan_suggestions": {
       "name": "Rescan suggestions",
-      "description": "Look again for devices that share a MAC address or hardware identifier, and for devices in the same area with similar names."
+      "description": "Look again for devices that share a MAC address or hardware identifier, or that have the same or a similar name. Strong matches are linked automatically when that option is on."
+    },
+    "reset_dismissed": {
+      "name": "Reset dismissed and unlinked",
+      "description": "Forget ignored suggestions and devices you unlinked, then look again. Pairs you had separated can be linked automatically once more."
+    }
+  },
+  "issues": {
+    "auto_linked": {
+      "title": "Device Linker linked {count} devices",
+      "description": "These devices were linked automatically because they share a MAC address or a matching name. Each group is a Device Linker entry you can change or delete.\n\n{summary}\n\nTo undo one, open that entry and choose Configure, or delete the entry. A device you remove is not linked again. Run Reset dismissed and unlinked to allow those pairs again."
     }
   }
 }

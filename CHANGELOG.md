@@ -5,6 +5,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-10-28
+
+### Added
+
+- Strong matches are linked automatically. A shared MAC address or hardware identifier, and an exact device name of more than one word, become a normal Device Linker entry (`Link <device> to N devices`) instead of a discovered integration you have to confirm. Several devices that share one anchor are grouped onto that one entry. A fuzzy name is linked when both devices are in the same area, they share at least two distinctive words, and the score reaches the automatic threshold. A single shared word stays a suggestion.
+- **Configure** has **Link strong matches automatically** (on by default) and **Automatic name similarity** (default 0.95, from 0.5 to 1). Name similarity for suggestions is still there. Both sliders apply to every entry.
+- Each entry records whether it was created automatically or by hand. Automatic entries show up in the **Suggestions** sensor and in diagnostics.
+- A repair lists the devices that were linked automatically.
+- **Reset dismissed and unlinked** forgets ignored suggestions and pairs you separated, then looks again.
+- The **Suggestions** sensor records when the last scan finished, including when the count stays at 0.
+
+### Changed
+
+- Name matching no longer requires both devices to be in the same area. A device with no area, which is common for a UniFi client, can match a device in a room or another device that also has no area. Two devices that are each assigned to a different area are still not matched on name alone. Automatic linking is stricter: a missing area is linked only when the full name matches and the name is more than one word, so an unassigned device called TV is not linked to every TV.
+- An exact name always matches, including when the name is only an area plus a generic word such as "light".
+- Area names are ignored as whole words. An area called Room does not change a device named bedroom.
+- Devices in the same area are still suggested when neither has a MAC address. Other name pairs are compared when at least one of them has a MAC, so a large list of devices without an address is not compared with itself.
+
+### Fixed
+
+- Suggestions stayed at 0 when the devices that should be linked were the same name and only one of them had a MAC, because UniFi devices often have no area and name matching skipped any device without one.
+- A MAC address Device Linker copied onto a device is not used as the anchor for a later match. The device that already had the address stays the anchor.
+- The integration scans again after Home Assistant has finished starting, so devices registered while other integrations are still setting up are included. Device registry creates, updates, and removals still schedule one scan after a short delay.
+
 ## [1.2.1] - 2026-10-28
 
 ### Fixed
@@ -57,6 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[1.3.0]: https://github.com/bisman-automations/ha-device-linker/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/bisman-automations/ha-device-linker/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/bisman-automations/ha-device-linker/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/bisman-automations/ha-device-linker/compare/v1.1.0...v1.1.1

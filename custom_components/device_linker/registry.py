@@ -10,8 +10,10 @@ from .const import (
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
     CONF_MAIN_DEVICE_ID,
+    CONF_ORIGIN,
     CONF_PEER_DEVICE_ID,
     CONF_TARGET_DEVICES,
+    ORIGIN_MANUAL,
 )
 
 
@@ -49,6 +51,9 @@ def get_entry_settings(entry: ConfigEntry) -> dict[str, object]:
                 else {}
             )
 
+    origin = settings.get(CONF_ORIGIN, ORIGIN_MANUAL)
+    if origin not in {"manual", "auto"}:
+        origin = ORIGIN_MANUAL
     return {
         CONF_MAIN_DEVICE_ID: settings.get(
             CONF_MAIN_DEVICE_ID,
@@ -61,4 +66,18 @@ def get_entry_settings(entry: ConfigEntry) -> dict[str, object]:
         CONF_LINKED_DEVICE_IDS: linked_device_ids,
         CONF_MAC_ADDRESS: settings[CONF_MAC_ADDRESS],
         CONF_ADDED_CONNECTIONS: added_connections,
+        # Entries saved before 1.3.0 have no origin. They were created by a
+        # person, and automatic linking must not relabel them.
+        CONF_ORIGIN: origin,
     }
+
+
+def link_unique_id(main_device_id: str | None, mac: str) -> str:
+    """Unique id for the one entry that shares this anchor and MAC."""
+    return f"{main_device_id or 'manual'}_{mac}"
+
+
+def link_title(main_name: str, count: int) -> str:
+    """Title used for manual and automatic entries, such as ``Link TV to 2 devices``."""
+    noun = "device" if count == 1 else "devices"
+    return f"Link {main_name} to {count} {noun}"

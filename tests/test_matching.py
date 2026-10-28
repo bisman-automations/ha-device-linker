@@ -287,3 +287,473 @@ def test_choose_link_ends_prefers_the_device_that_already_has_the_mac() -> None:
     assert matching.choose_link_ends("a", "b", mac, connection, set()) == ("a", ["b"])
     assert matching.choose_link_ends("a", "b", mac, set(), connection) == ("b", ["a"])
     assert matching.choose_link_ends("a", "b", mac, set(), set()) == (None, ["a", "b"])
+    # Registry values are not always pre-normalized. The anchor check folds them.
+    assert matching.choose_link_ends(
+        "a", "b", mac, {("mac", "AA:BB:CC:DD:EE:FF")}, set()
+    ) == ("a", ["b"])
+
+
+def test_living_room_tv_normalization_keeps_the_name() -> None:
+    """The reported names are not emptied by brand, area, or generic stripping.
+
+    "Living Room TV" keeps "tv" once the area is removed, and the full folded
+    name when there is no area. The default 0.8 threshold is not what drops
+    an exact pair: the score is 1.
+    """
+    assert matching.normalize_name("Living Room TV", "Living Room") == "tv"
+    assert matching.normalize_name("Living Room TV", None) == "living room tv"
+    assert matching.normalize_name("UniFi Living Room Apple TV", "Living Room") == "tv"
+    assert matching.fold_name("Living Room TV") == matching.fold_name("living-room tv")
+    assert matching.name_similarity("Living Room TV", "Living Room TV", None) == 1.0
+    assert (
+        matching.name_similarity(
+            "Living Room TV", "Living Room Apple TV", "Living Room"
+        )
+        == 1.0
+    )
+
+
+def test_exact_names_match_when_distinctive_words_are_stripped() -> None:
+    """Two devices both called "Kitchen Light" match even though nothing distinctive remains."""
+    left = _device("a", name="Kitchen Light", area_id="kitchen", area_name="Kitchen")
+    right = _device("b", name="Kitchen Light", area_id="kitchen", area_name="Kitchen")
+    suggestions = matching.suggest(
+        [left, right],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_hardware=False,
+    )
+    assert len(suggestions) == 1
+    assert suggestions[0].exact is True
+    assert suggestions[0].score == 1.0
+
+
+def test_unifi_without_an_area_matches_the_same_name() -> None:
+    """A UniFi client with no area matches the same name in a room.
+
+    Name matching used to require both devices to have the same area id, so
+    every unassigned UniFi client was invisible to the name tier. That is the
+    case that left the Suggestions sensor at 0.
+    """
+    unifi = _device(
+        "unifi-tv",
+        name="Living Room TV",
+        area_id=None,
+        area_name=None,
+        integration="unifi",
+        connections=(("mac", "AA:BB:CC:DD:EE:01"),),
+    )
+    apple = _device(
+        "apple-tv",
+        name="Living Room TV",
+        area_id="living",
+        area_name="Living Room",
+        integration="apple_tv",
+    )
+    sonos = _device(
+        "sonos-tv",
+        name="Living Room TV",
+        area_id=None,
+        area_name=None,
+        integration="sonos",
+    )
+    suggestions = matching.suggest(
+        [unifi, apple, sonos],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_hardware=False,
+    )
+    keys = {item.key for item in suggestions}
+    assert matching.pair_key("unifi-tv", "apple-tv") in keys
+    assert matching.pair_key("unifi-tv", "sonos-tv") in keys
+    apple_match = next(
+        item
+        for item in suggestions
+        if item.key == matching.pair_key("unifi-tv", "apple-tv")
+    )
+    assert apple_match.exact is True
+    assert apple_match.score == 1.0
+    assert apple_match.reason == "name"
+    assert apple_match.anchor_device_id == "unifi-tv"
+    assert apple_match.mac == "aa:bb:cc:dd:ee:01"
+    assert apple_match.area_mismatch is True
+
+
+def test_name_match_rejects_two_different_assigned_areas() -> None:
+    """A missing area is compatible. Two different areas are not."""
+    bedroom = _device(
+        "a",
+        name="Bedroom Speaker",
+        area_id="bedroom",
+        area_name="Bedroom",
+        connections=(("mac", "aa:bb:cc:dd:ee:02"),),
+    )
+    office = _device(
+        "b",
+        name="Bedroom Speaker",
+        area_id="office",
+        area_name="Office",
+    )
+    assert (
+        matching.suggest(
+            [bedroom, office],
+            linked_pairs=set(),
+            dismissed=set(),
+            threshold=0.5,
+            match_hardware=False,
+        )
+        == []
+    )
+
+
+def test_auto_link_groups_every_same_name_device_on_the_anchor() -> None:
+    """One UniFi MAC becomes one plan, not one plan per pair."""
+    unifi = _device(
+        "unifi-tv",
+        name="Living Room TV",
+        area_id=None,
+        area_name=None,
+        integration="unifi",
+        connections=(("mac", "aa:bb:cc:dd:ee:01"),),
+    )
+    apple = _device(
+        "apple-tv",
+        name="Living Room TV",
+        area_id="living",
+        area_name="Living Room",
+        integration="apple_tv",
+    )
+    shelly = _device(
+        "shelly-tv",
+        name="Living Room TV",
+        area_id="living",
+        area_name="Living Room",
+        integration="shelly",
+    )
+    suggestions = matching.suggest(
+        [unifi, apple, shelly],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+    )
+    plans = matching.plan_auto_links(suggestions, enabled=True, threshold=0.95)
+    assert len(plans) == 1
+    plan = plans[0]
+    assert plan.anchor_device_id == "unifi-tv"
+    assert plan.mac == "aa:bb:cc:dd:ee:01"
+    assert set(plan.linked_device_ids) == {"apple-tv", "shelly-tv"}
+    assert plan.exact is True
+
+    held = matching.plan_auto_links(suggestions, enabled=False, threshold=0.95)
+    assert held == []
+
+
+def test_same_config_entry_is_not_grouped_onto_the_anchor() -> None:
+    """A second UniFi device from the same entry cannot take the MAC."""
+    unifi = _device(
+        "unifi-tv",
+        name="Living Room TV",
+        area_id=None,
+        area_name=None,
+        integration="unifi",
+        config_entry_id="unifi-entry",
+        connections=(("mac", "aa:bb:cc:dd:ee:01"),),
+    )
+    duplicate = _device(
+        "unifi-dup",
+        name="Living Room TV",
+        area_id=None,
+        area_name=None,
+        integration="unifi",
+        config_entry_id="unifi-entry",
+    )
+    apple = _device(
+        "apple-tv",
+        name="Living Room TV",
+        area_id="living",
+        area_name="Living Room",
+        integration="apple_tv",
+    )
+    suggestions = matching.suggest(
+        [unifi, duplicate, apple],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_hardware=False,
+    )
+    assert all(
+        matching.pair_key("unifi-tv", "unifi-dup") != item.key for item in suggestions
+    )
+    plans = matching.plan_auto_links(suggestions, enabled=True, threshold=0.95)
+    assert len(plans) == 1
+    assert plans[0].linked_device_ids == ("apple-tv",)
+
+
+def test_two_macs_are_not_an_automatic_name_link() -> None:
+    """Do not pick one of two addresses just because the names match."""
+    left = _device(
+        "a",
+        name="Living Room TV",
+        area_id=None,
+        area_name=None,
+        connections=(("mac", "aa:bb:cc:dd:ee:01"),),
+    )
+    right = _device(
+        "b",
+        name="Living Room TV",
+        area_id="living",
+        area_name="Living Room",
+        connections=(("mac", "aa:bb:cc:dd:ee:02"),),
+    )
+    suggestions = matching.suggest(
+        [left, right],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_hardware=False,
+    )
+    assert len(suggestions) == 1
+    assert suggestions[0].anchor_device_id is None
+    assert matching.plan_auto_links(suggestions, enabled=True, threshold=0.5) == []
+
+
+def test_one_shared_word_is_a_suggestion_and_not_an_automatic_link() -> None:
+    """North window and North porch share one word, so they are not linked."""
+    left = _device(
+        "a",
+        name="North window",
+        area_id="room",
+        area_name="Room",
+        connections=(("mac", "aa:bb:cc:dd:ee:03"),),
+    )
+    right = _device("b", name="North porch", area_id="room", area_name="Room")
+    suggestions = matching.suggest(
+        [left, right],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.5,
+        match_hardware=False,
+    )
+    assert len(suggestions) == 1
+    assert suggestions[0].exact is False
+    assert suggestions[0].shared_tokens == 1
+    assert suggestions[0].score >= 0.5
+    assert matching.plan_auto_links(suggestions, enabled=True, threshold=0.5) == []
+
+
+def test_two_shared_distinctive_words_can_auto_link_in_one_area() -> None:
+    """A fuzzy name with two shared words in the same area can be linked."""
+    left = _device(
+        "a",
+        name="Red bicycle",
+        area_id="kitchen",
+        area_name="Kitchen",
+        connections=(("mac", "aa:bb:cc:dd:ee:04"),),
+    )
+    right = _device(
+        "b", name="Red bicycle stand", area_id="kitchen", area_name="Kitchen"
+    )
+    suggestions = matching.suggest(
+        [left, right],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_hardware=False,
+    )
+    assert len(suggestions) == 1
+    assert suggestions[0].exact is False
+    assert suggestions[0].shared_tokens >= 2
+    plans = matching.plan_auto_links(suggestions, enabled=True, threshold=0.95)
+    assert len(plans) == 1
+    assert plans[0].anchor_device_id == "a"
+    assert plans[0].linked_device_ids == ("b",)
+
+
+def test_area_names_are_stripped_as_whole_tokens() -> None:
+    """An area called Room must not rewrite bedroom or bathroom."""
+    assert matching.normalize_name("bedroom tablet", "Room") == "bedroom tablet"
+    assert matching.normalize_name("bathroom light", "Room") == "bathroom"
+    assert "bedroom" in matching.normalize_name("bedroom speaker", "Room").split()
+    left = _device(
+        "bed",
+        name="bedroom tablet",
+        area_id="room",
+        area_name="Room",
+        connections=(("mac", "aa:bb:cc:dd:ee:05"),),
+    )
+    right = _device("short", name="bed tablet", area_id="room", area_name="Room")
+    suggestions = matching.suggest(
+        [left, right],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.5,
+        match_hardware=False,
+    )
+    assert matching.plan_auto_links(suggestions, enabled=True, threshold=0.5) == []
+
+
+def test_unassigned_one_word_name_is_not_auto_linked() -> None:
+    """A bare TV with no area is a suggestion, not a link to every TV."""
+    unifi = _device(
+        "unifi",
+        name="TV",
+        area_id=None,
+        area_name=None,
+        integration="unifi",
+        connections=(("mac", "aa:bb:cc:dd:ee:06"),),
+    )
+    other = _device(
+        "other",
+        name="TV",
+        area_id=None,
+        area_name=None,
+        integration="apple_tv",
+    )
+    suggestions = matching.suggest(
+        [unifi, other],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_hardware=False,
+    )
+    assert len(suggestions) == 1
+    assert suggestions[0].exact is True
+    assert matching.plan_auto_links(suggestions, enabled=True, threshold=0.8) == []
+
+    named = _device(
+        "named",
+        name="Living Room TV",
+        area_id=None,
+        area_name=None,
+        connections=(("mac", "aa:bb:cc:dd:ee:07"),),
+    )
+    peer = _device(
+        "peer", name="Living Room TV", area_id="living", area_name="Living Room"
+    )
+    planned = matching.plan_auto_links(
+        matching.suggest(
+            [named, peer],
+            linked_pairs=set(),
+            dismissed=set(),
+            threshold=0.8,
+            match_hardware=False,
+        ),
+        enabled=True,
+        threshold=0.95,
+    )
+    assert len(planned) == 1
+    assert planned[0].anchor_device_id == "named"
+
+
+def test_copied_mac_does_not_become_the_anchor() -> None:
+    """An address Device Linker copied on is ignored when picking the anchor."""
+    mac = "aa:bb:cc:dd:ee:01"
+    unifi = _device(
+        "unifi",
+        name="Living Room TV",
+        area_id=None,
+        area_name=None,
+        integration="unifi",
+        connections=(("mac", mac),),
+    )
+    apple = _device(
+        "apple",
+        name="Living Room TV",
+        area_id="living",
+        area_name="Living Room",
+        integration="apple_tv",
+        connections=(("mac", mac),),
+    )
+    extra = _device(
+        "extra",
+        name="Living Room TV",
+        area_id=None,
+        area_name=None,
+        integration="esphome",
+    )
+    suggestions = matching.suggest(
+        [unifi, apple, extra],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_hardware=False,
+        copied_macs={("apple", mac)},
+    )
+    plans = matching.plan_auto_links(suggestions, enabled=True, threshold=0.95)
+    assert len(plans) == 1
+    assert plans[0].anchor_device_id == "unifi"
+    assert plans[0].linked_device_ids == ("extra",)
+    assert all(item.anchor_device_id != "apple" for item in suggestions)
+
+    only_copied = matching.suggest(
+        [apple, extra],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_hardware=False,
+        copied_macs={("apple", mac)},
+    )
+    assert only_copied
+    assert only_copied[0].anchor_device_id is None
+    assert matching.plan_auto_links(only_copied, enabled=True, threshold=0.5) == []
+
+
+def test_same_area_suggestions_remain_when_neither_device_has_a_mac() -> None:
+    """Devices in one room are still suggested when neither has an address."""
+    left = _device(
+        "a", name="Kitchen ceiling light", area_id="kitchen", area_name="Kitchen"
+    )
+    right = _device("b", name="Kitchen ceiling", area_id="kitchen", area_name="Kitchen")
+    suggestions = matching.suggest(
+        [left, right],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_hardware=False,
+    )
+    assert len(suggestions) == 1
+    assert suggestions[0].reason == "name"
+    assert matching.plan_auto_links(suggestions, enabled=True, threshold=0.5) == []
+
+
+def test_fuzzy_names_without_a_mac_are_not_compared_across_areas() -> None:
+    """Unaddressed devices are not fuzzy-matched to the whole registry.
+
+    An exact name is still suggested. A fuzzy name is suggested when the
+    devices share an area, or when one of them has a MAC.
+    """
+    left = _device("a", name="Patio heater", area_id=None, area_name=None)
+    right = _device("b", name="Patio heater remote", area_id=None, area_name=None)
+    assert (
+        matching.suggest(
+            [left, right],
+            linked_pairs=set(),
+            dismissed=set(),
+            threshold=0.5,
+            match_hardware=False,
+        )
+        == []
+    )
+    same_room = [
+        _device(
+            "a",
+            name="Patio heater",
+            area_id="patio",
+            area_name="Patio",
+        ),
+        _device(
+            "b",
+            name="Patio heater remote",
+            area_id="patio",
+            area_name="Patio",
+        ),
+    ]
+    assert matching.suggest(
+        same_room,
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.5,
+        match_hardware=False,
+    )

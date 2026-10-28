@@ -1,40 +1,66 @@
-"""Keep link suggestions up to date and show them as discoveries.
+"""Keep link suggestions up to date, link the strong ones, and show the rest.
 
 A single manager runs for the whole integration, started by the first real
-config entry and stopped when the last one unloads. Preferences and dismissed
-pairs live in a Store so they survive a restart. Device and area registry
-updates schedule one scan after a short debounce.
+config entry and stopped when the last one unloads. Preferences, dismissed
+suggestions, and pairs the user unlinked live in a Store so they survive a
+restart. Device and area registry updates, and Home Assistant finishing
+startup, schedule one scan after a short debounce.
+
+Startup order is why the scan listens for ``EVENT_HOMEASSISTANT_STARTED``.
+The first config entry can be set up before other integrations have
+registered their devices. A scan at that moment sees an empty registry.
+Devices created or updated later schedule another scan; the started event
+covers integrations that register during startup and then go quiet.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import timedelta
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
 import logging
+from types import MappingProxyType
 from typing import Any
 
-from homeassistant.config_entries import SOURCE_DISCOVERY, SOURCE_IGNORE, ConfigEntry
+from homeassistant.config_entries import (
+    SOURCE_DISCOVERY,
+    SOURCE_IGNORE,
+    SOURCE_USER,
+    ConfigEntry,
+)
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.data_entry_flow import AbortFlow
-from homeassistant.helpers import area_registry as ar, device_registry as dr
+from homeassistant.helpers import (
+    area_registry as ar,
+    device_registry as dr,
+    issue_registry as ir,
+)
 from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_ADDED_CONNECTIONS,
+    CONF_AUTO_LINK,
+    CONF_AUTO_LINK_THRESHOLD,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
     CONF_MAIN_DEVICE_ID,
     CONF_MATCH_HARDWARE,
     CONF_MATCH_NAMES,
+    CONF_ORIGIN,
     CONF_SUGGESTION_THRESHOLD,
     DATA_MANAGER,
+    DEFAULT_AUTO_LINK_THRESHOLD,
     DEFAULT_SUGGESTION_THRESHOLD,
     DOMAIN,
+    ISSUE_AUTO_LINKED,
     MAX_DISCOVERY_FLOWS,
     MAX_LISTED_SUGGESTIONS,
+    ORIGIN_AUTO,
+    ORIGIN_MANUAL,
     SERVICE_RESCAN,
+    SERVICE_RESET,
     STORAGE_KEY,
     STORAGE_VERSION,
     SUGGESTION_DEBOUNCE_SECONDS,
@@ -42,26 +68,39 @@ from .const import (
     SUGGESTION_THRESHOLD_MIN,
 )
 from .matching import (
+    AutoLinkPlan,
     DeviceView,
     Suggestion,
     choose_link_ends,
     pair_key,
+    pairs_among,
+    plan_auto_links,
     suggest,
     suggestion_unique_id,
 )
-from .registry import get_entry_settings
+from .registry import get_device, get_entry_settings, link_title, link_unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
 class SuggestionSettings:
-    """Integration-wide suggestion preferences."""
+    """Integration-wide suggestion and automatic-link preferences.
+
+    ``dismissed`` holds suggestion unique ids the user ignored. ``unlinked``
+    holds pair keys the user separated; those pairs are not linked again.
+    ``announced`` holds pair keys already described by the repair, so a
+    restart does not raise the same repair again.
+    """
 
     threshold: float = DEFAULT_SUGGESTION_THRESHOLD
     match_hardware: bool = True
     match_names: bool = True
+    auto_link: bool = True
+    auto_link_threshold: float = DEFAULT_AUTO_LINK_THRESHOLD
     dismissed: frozenset[str] = frozenset()
+    unlinked: frozenset[str] = frozenset()
+    announced: frozenset[str] = frozenset()
 
 
 def async_get_manager(hass: HomeAssistant) -> SuggestionManager | None:
@@ -84,8 +123,12 @@ class SuggestionManager:
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._settings = SuggestionSettings()
         self._suggestions: list[Suggestion] = []
+        self._last_scan: datetime | None = None
+        self._in_scan = False
+        self._scan_again = False
         self._unsub_device: Any = None
         self._unsub_area: Any = None
+        self._unsub_started: Any = None
         self._unsub_debounce: Any = None
         self._sensor: Any = None
         self._sensor_entry_id: str | None = None
@@ -110,12 +153,21 @@ class SuggestionManager:
         """Load preferences and listen for registry changes."""
         self._settings = await _load_settings(self._store)
         self._unsub_device = self.hass.bus.async_listen(
-            dr.EVENT_DEVICE_REGISTRY_UPDATED, self._schedule_scan
+            dr.EVENT_DEVICE_REGISTRY_UPDATED, self._schedule_device_scan
         )
         self._unsub_area = self.hass.bus.async_listen(
             ar.EVENT_AREA_REGISTRY_UPDATED, self._schedule_scan
         )
+        # listen_once survives until the event or until stop. Integrations
+        # that are set up before this one still deliver create events; this
+        # covers the ones that register during startup and then sit still.
+        self._unsub_started = self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED, self._schedule_scan
+        )
         self.hass.services.async_register(DOMAIN, SERVICE_RESCAN, self._async_rescan)
+        self.hass.services.async_register(
+            DOMAIN, SERVICE_RESET, self._async_reset_dismissed
+        )
 
     async def async_stop(self) -> None:
         """Stop listeners and the rescan action."""
@@ -128,32 +180,69 @@ class SuggestionManager:
         if self._unsub_area is not None:
             self._unsub_area()
             self._unsub_area = None
-        if self.hass.services.has_service(DOMAIN, SERVICE_RESCAN):
-            self.hass.services.async_remove(DOMAIN, SERVICE_RESCAN)
+        if self._unsub_started is not None:
+            self._unsub_started()
+            self._unsub_started = None
+        for service in (SERVICE_RESCAN, SERVICE_RESET):
+            if self.hass.services.has_service(DOMAIN, service):
+                self.hass.services.async_remove(DOMAIN, service)
         self._sensor = None
         self._sensor_entry_id = None
         self._platform_adders.clear()
 
     async def async_scan(self) -> list[Suggestion]:
-        """Rebuild suggestions now and reconcile discovery flows."""
-        self._suggestions = suggest(
+        """Rebuild suggestions, link strong matches, and reconcile discoveries.
+
+        Re-entering while a scan is already applying entries (their setup
+        schedules another scan) records one follow-up pass instead of
+        running nested. Home Assistant runs this on a single loop.
+        """
+        if self._in_scan:
+            self._scan_again = True
+            return self._suggestions
+        self._in_scan = True
+        try:
+            await self._async_scan_once()
+            while self._scan_again:
+                self._scan_again = False
+                await self._async_scan_once()
+        finally:
+            self._in_scan = False
+        return self._suggestions
+
+    async def _async_scan_once(self) -> None:
+        blocked = set(self._settings.dismissed) | set(self._settings.unlinked)
+        matches = suggest(
             _device_views(self.hass),
             linked_pairs=_linked_pairs(self.hass),
-            dismissed=set(self._settings.dismissed),
+            dismissed=blocked,
             threshold=self._settings.threshold,
             match_hardware=self._settings.match_hardware,
             match_names=self._settings.match_names,
+            copied_macs=_copied_macs(self.hass),
         )
+        plans = plan_auto_links(
+            matches,
+            enabled=self._settings.auto_link,
+            threshold=self._settings.auto_link_threshold,
+        )
+        linked_keys = await self._async_apply_plans(plans)
+        self._suggestions = [item for item in matches if item.key not in linked_keys]
+        self._last_scan = dt_util.utcnow()
         _LOGGER.debug(
-            "Suggestion scan found %s candidate(s) (threshold %s, hardware %s, names %s)",
+            "Suggestion scan found %s candidate(s), linked %s, %s still waiting "
+            "(threshold %s, auto %s at %s, hardware %s, names %s)",
+            len(matches),
+            len(linked_keys),
             len(self._suggestions),
             self._settings.threshold,
+            self._settings.auto_link,
+            self._settings.auto_link_threshold,
             self._settings.match_hardware,
             self._settings.match_names,
         )
         await self._async_sync_flows()
         self._publish_sensor()
-        return self._suggestions
 
     async def async_update_settings(
         self,
@@ -161,26 +250,41 @@ class SuggestionManager:
         threshold: float,
         match_hardware: bool,
         match_names: bool,
+        auto_link: bool,
+        auto_link_threshold: float,
+        scan: bool = True,
     ) -> None:
-        """Store new preferences and scan again."""
-        self._settings = SuggestionSettings(
+        """Store new preferences and, by default, scan again."""
+        self._settings = replace(
+            self._settings,
             threshold=_clamp_threshold(threshold),
             match_hardware=match_hardware,
             match_names=match_names,
-            dismissed=self._settings.dismissed,
+            auto_link=bool(auto_link),
+            auto_link_threshold=_clamp_threshold(auto_link_threshold),
         )
         await _save_settings(self._store, self._settings)
-        await self.async_scan()
+        if scan:
+            await self.async_scan()
+
+    async def async_remember_unlinked(self, pairs: set[str]) -> None:
+        """Remember pairs the user separated so a later scan leaves them alone."""
+        fresh = {pair for pair in pairs if pair} - self._settings.unlinked
+        if not fresh and not (self._settings.announced & pairs):
+            return
+        self._settings = replace(
+            self._settings,
+            unlinked=self._settings.unlinked | pairs,
+            announced=self._settings.announced - pairs,
+        )
+        await _save_settings(self._store, self._settings)
 
     async def async_dismiss(self, unique_id: str) -> None:
         """Remember a suggestion so later scans do not offer it again."""
         if unique_id in self._settings.dismissed:
             return
-        self._settings = SuggestionSettings(
-            threshold=self._settings.threshold,
-            match_hardware=self._settings.match_hardware,
-            match_names=self._settings.match_names,
-            dismissed=self._settings.dismissed | {unique_id},
+        self._settings = replace(
+            self._settings, dismissed=self._settings.dismissed | {unique_id}
         )
         await _save_settings(self._store, self._settings)
         self._suggestions = [
@@ -221,6 +325,13 @@ class SuggestionManager:
         self._sensor_entry_id = next_entry_id
         async_add_entities([self._sensor])
 
+    @property
+    def last_scan(self) -> str | None:
+        """ISO timestamp of the latest finished scan, if one has run."""
+        if self._last_scan is None:
+            return None
+        return dt_util.as_local(self._last_scan).isoformat()
+
     def listed_suggestions(self) -> list[dict[str, object]]:
         """Attributes for the sensor and diagnostics, without MAC addresses."""
         return [
@@ -228,11 +339,21 @@ class SuggestionManager:
         ]
 
     @callback
+    def _schedule_device_scan(self, event: Event) -> None:
+        """Rescan after a device is created, updated, or removed."""
+        action = event.data.get("action")
+        if action not in {"create", "update", "remove"}:
+            return
+        self._schedule_scan(event)
+
+    @callback
     def _schedule_scan(self, _event: Event) -> None:
         """Collapse a burst of registry events into one scan.
 
-        Tracked on Home Assistant's clock so a test can fire the time change,
-        and so unload cancels it instead of leaving a timer behind.
+        Create and update events are how a UniFi poll, or another integration
+        finishing its setup, gets a new scan. Tracked on Home Assistant's
+        clock so a test can fire the time change, and so unload cancels it
+        instead of leaving a timer behind.
         """
         if self._unsub_debounce is not None:
             self._unsub_debounce()
@@ -249,6 +370,16 @@ class SuggestionManager:
 
     async def _async_rescan(self, _call: Any) -> None:
         """Handle the rescan action."""
+        await self.async_scan()
+
+    async def _async_reset_dismissed(self, _call: Any) -> None:
+        """Forget ignored suggestions and unlinked pairs, then look again."""
+        self._settings = replace(
+            self._settings,
+            dismissed=frozenset(),
+            unlinked=frozenset(),
+        )
+        await _save_settings(self._store, self._settings)
         await self.async_scan()
 
     async def _async_sync_flows(self) -> None:
@@ -292,6 +423,141 @@ class SuggestionManager:
             return
         sensor.async_write_ha_state()
 
+    async def _async_apply_plans(self, plans: list[AutoLinkPlan]) -> set[str]:
+        """Create or extend one entry per plan. Return the pair keys now linked."""
+        linked: set[str] = set()
+        notices: list[str] = []
+        newly: set[str] = set()
+        for plan in plans:
+            try:
+                keys, notice = await self._async_apply_plan(plan)
+            except Exception:
+                _LOGGER.exception("Could not automatically link %s", plan.anchor_name)
+                continue
+            linked |= keys
+            newly |= keys
+            if notice:
+                notices.append(notice)
+        newly -= self._settings.announced
+        if newly:
+            self._settings = replace(
+                self._settings, announced=self._settings.announced | newly
+            )
+            await _save_settings(self._store, self._settings)
+            _publish_auto_link_issue(self.hass, notices)
+        return linked
+
+    async def _async_apply_plan(
+        self, plan: AutoLinkPlan
+    ) -> tuple[set[str], str | None]:
+        """Link ``plan`` onto the anchor's entry. Return new pair keys and a notice."""
+        registry = dr.async_get(self.hass)
+        anchor = get_device(registry, plan.anchor_device_id)
+        if anchor is None:
+            return set(), None
+        unique_id = link_unique_id(plan.anchor_device_id, plan.mac)
+        existing = _find_link_entry(
+            self.hass, unique_id, plan.anchor_device_id, plan.mac
+        )
+        connection = (dr.CONNECTION_NETWORK_MAC, plan.mac)
+        already: set[str] = set()
+        old_added: dict[str, bool] = {}
+        origin = ORIGIN_AUTO
+        if existing is not None:
+            current = get_entry_settings(existing)
+            already = {
+                device_id
+                for device_id in current[CONF_LINKED_DEVICE_IDS]
+                if isinstance(device_id, str)
+            }
+            old_added = {
+                device_id: bool(flag)
+                for device_id, flag in dict(current[CONF_ADDED_CONNECTIONS]).items()
+            }
+            origin = (
+                current[CONF_ORIGIN]
+                if current[CONF_ORIGIN] == ORIGIN_MANUAL
+                else ORIGIN_AUTO
+            )
+        # Keep devices the entry already links. A plan only lists new matches,
+        # and replacing the list would drop the ones a person already chose.
+        chosen: list[str] = [device_id for device_id in already]
+        chosen_names: list[str] = []
+        used_entries = {anchor.config_entry_id}
+        for device_id in already:
+            device = get_device(registry, device_id)
+            if device is not None and device.config_entry_id:
+                used_entries.add(device.config_entry_id)
+        for device_id, device_name in zip(
+            plan.linked_device_ids, plan.linked_names, strict=True
+        ):
+            if device_id in already:
+                continue
+            device = get_device(registry, device_id)
+            if device is None or device.config_entry_id in used_entries:
+                continue
+            if _linked_on_another_entry(
+                self.hass, device_id, existing.entry_id if existing else None
+            ):
+                continue
+            if _mac_conflicts(registry, device, connection, already | set(chosen)):
+                _LOGGER.info(
+                    "Skipped %s: %s is already used on another device from %s",
+                    device_name,
+                    plan.mac,
+                    device.config_entry_id,
+                )
+                continue
+            used_entries.add(device.config_entry_id)
+            chosen.append(device_id)
+            if device_id not in already:
+                chosen_names.append(device_name)
+        fresh = [device_id for device_id in chosen if device_id not in already]
+        if not fresh and existing is not None:
+            return set(), None
+        if not chosen:
+            return set(), None
+        added = dict(old_added)
+        for device_id in chosen:
+            device = get_device(registry, device_id)
+            if device is None:
+                continue
+            if device_id in already and device_id in added:
+                continue
+            added[device_id] = connection not in device.connections
+        payload = _link_payload(plan.anchor_device_id, chosen, plan.mac, added, origin)
+        anchor_name = anchor.name_by_user or anchor.name or plan.anchor_name
+        title = link_title(anchor_name, len(chosen))
+        if existing is None:
+            entry = ConfigEntry(
+                data=payload,
+                discovery_keys=MappingProxyType({}),
+                domain=DOMAIN,
+                minor_version=1,
+                options=None,
+                source=SOURCE_USER,
+                subentries_data=None,
+                title=title,
+                unique_id=unique_id,
+                version=2,
+            )
+            await self.hass.config_entries.async_add(entry)
+        else:
+            _update_link_entry(self.hass, existing, payload, title, unique_id)
+            _apply_owned_connections(registry, chosen, added, connection)
+        keys = {pair_key(plan.anchor_device_id, device_id) for device_id in fresh}
+        keys |= pairs_among(None, fresh)
+        if not fresh:
+            return set(), None
+        notice = f"{anchor_name} ({plan.anchor_integration}): {', '.join(chosen_names)}"
+        _LOGGER.info(
+            "Automatically linked %s to %s device(s): %s",
+            anchor_name,
+            len(fresh),
+            ", ".join(chosen_names),
+        )
+        return keys, notice
+
 
 def _discovery_data(unique_id: str, item: Suggestion) -> dict[str, Any]:
     return {
@@ -308,6 +574,192 @@ def _discovery_data(unique_id: str, item: Suggestion) -> dict[str, Any]:
         "area_a": item.area_name_a or "Unassigned",
         "area_b": item.area_name_b or "Unassigned",
     }
+
+
+def _find_link_entry(
+    hass: HomeAssistant, unique_id: str, main_id: str, mac: str
+) -> ConfigEntry | None:
+    """Return the entry for this anchor and MAC, including ones saved before unique ids."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if not entry_is_link(entry):
+            continue
+        if entry.unique_id == unique_id:
+            return entry
+        try:
+            settings = get_entry_settings(entry)
+        except KeyError:
+            continue
+        if (
+            settings[CONF_MAIN_DEVICE_ID] == main_id
+            and settings[CONF_MAC_ADDRESS] == mac
+        ):
+            return entry
+    return None
+
+
+def _linked_on_another_entry(
+    hass: HomeAssistant, device_id: str, skip_entry_id: str | None
+) -> bool:
+    """Return whether some other Device Linker entry already includes this device.
+
+    Extending the entry that already has the anchor is handled by the caller.
+    Putting the device on a second entry would give it a second MAC.
+    """
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if not entry_is_link(entry) or entry.entry_id == skip_entry_id:
+            continue
+        try:
+            settings = get_entry_settings(entry)
+        except KeyError:
+            continue
+        main = settings[CONF_MAIN_DEVICE_ID]
+        linked = settings[CONF_LINKED_DEVICE_IDS]
+        if device_id == main or device_id in linked:
+            return True
+    return False
+
+
+def _mac_conflicts(registry, device, connection, allowed_ids: set[str]) -> bool:
+    """Return whether another device from the same config entry already has ``connection``."""
+    if not device.config_entry_id:
+        return True
+    for other in dr.async_entries_for_config_entry(registry, device.config_entry_id):
+        if other.id == device.id or other.id in allowed_ids:
+            continue
+        if connection in other.connections:
+            return True
+    return False
+
+
+def _link_payload(
+    main_id: str | None,
+    linked_ids: list[str],
+    mac: str,
+    added: dict[str, bool],
+    origin: str,
+) -> dict[str, Any]:
+    return {
+        CONF_MAIN_DEVICE_ID: main_id,
+        CONF_LINKED_DEVICE_IDS: linked_ids,
+        CONF_MAC_ADDRESS: mac,
+        CONF_ADDED_CONNECTIONS: {
+            device_id: bool(added.get(device_id, False)) for device_id in linked_ids
+        },
+        CONF_ORIGIN: origin,
+    }
+
+
+def _update_link_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    payload: dict[str, Any],
+    title: str,
+    unique_id: str,
+) -> None:
+    """Write link data where get_entry_settings will read it.
+
+    Configure stores the link in options, which override data. Update both
+    when options are already present so an automatic addition is not hidden
+    by the previous options.
+    """
+    updated_options = {**entry.options, **payload} if entry.options else None
+    hass.config_entries.async_update_entry(
+        entry,
+        data={**entry.data, **payload},
+        options=updated_options if updated_options is not None else entry.options,
+        title=title,
+        unique_id=unique_id,
+    )
+
+
+def _apply_owned_connections(registry, device_ids, added, connection) -> None:
+    """Add the shared MAC to devices this entry owns. Setup does this for new entries."""
+    for device_id in device_ids:
+        if not added.get(device_id, False):
+            continue
+        device = get_device(registry, device_id)
+        if device is None or connection in device.connections:
+            continue
+        try:
+            registry.async_update_device(
+                device.id,
+                new_connections=device.connections | {connection},
+            )
+        except dr.DeviceConnectionCollisionError:
+            _LOGGER.warning(
+                "Could not add %s to device %s because another device from that "
+                "integration already has it",
+                connection[1],
+                device_id,
+            )
+
+
+def _publish_auto_link_issue(hass: HomeAssistant, notices: list[str]) -> None:
+    """Open or refresh the repair that lists what was linked automatically."""
+    if not notices:
+        return
+    shown = notices[:MAX_LISTED_SUGGESTIONS]
+    summary = "\n".join(shown)
+    extra = len(notices) - len(shown)
+    if extra > 0:
+        summary = f"{summary}\nAnd {extra} more."
+    count = 0
+    for line in notices:
+        _anchor, _sep, names = line.partition(": ")
+        count += len([name for name in names.split(", ") if name])
+    registry = ir.async_get(hass)
+    current = registry.async_get_issue(DOMAIN, ISSUE_AUTO_LINKED)
+    if current is not None and current.dismissed_version is not None:
+        ir.async_delete_issue(hass, DOMAIN, ISSUE_AUTO_LINKED)
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        ISSUE_AUTO_LINKED,
+        is_fixable=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key=ISSUE_AUTO_LINKED,
+        translation_placeholders={"count": str(count), "summary": summary},
+        learn_more_url="https://github.com/bisman-automations/ha-device-linker#how-auto-linking-works",
+    )
+
+
+def auto_linked_summaries(hass: HomeAssistant) -> list[dict[str, object]]:
+    """Automatic entries for the sensor and diagnostics. MAC addresses are omitted."""
+    registry = dr.async_get(hass)
+    items: list[dict[str, object]] = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if not entry_is_link(entry):
+            continue
+        try:
+            settings = get_entry_settings(entry)
+        except KeyError:
+            continue
+        if settings[CONF_ORIGIN] != ORIGIN_AUTO:
+            continue
+        main_id = settings[CONF_MAIN_DEVICE_ID]
+        main = get_device(registry, main_id) if isinstance(main_id, str) else None
+        main_name = (
+            main.name_by_user or main.name or main_id
+            if main is not None
+            else "Manual MAC"
+        )
+        linked_names: list[str] = []
+        for device_id in settings[CONF_LINKED_DEVICE_IDS]:
+            if not isinstance(device_id, str):
+                continue
+            device = get_device(registry, device_id)
+            if device is not None:
+                linked_names.append(device.name_by_user or device.name or device_id)
+        items.append(
+            {
+                "title": entry.title,
+                "main": main_name,
+                "linked": linked_names,
+            }
+        )
+        if len(items) >= MAX_LISTED_SUGGESTIONS:
+            break
+    return items
 
 
 def _iter_devices(registry: dr.DeviceRegistry):
@@ -355,6 +807,32 @@ def _device_views(hass: HomeAssistant) -> list[DeviceView]:
     return views
 
 
+def _copied_macs(hass: HomeAssistant) -> set[tuple[str, str]]:
+    """MAC connections this integration added, as ``(device id, mac)``.
+
+    ``added_connections`` is true only for a device whose address Device
+    Linker copied on. The main device, which already had the address, is not
+    in that set. Anchor selection ignores these so a linked Apple TV does not
+    become the anchor of the next match.
+    """
+    copied: set[tuple[str, str]] = set()
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if not entry_is_link(entry):
+            continue
+        try:
+            settings = get_entry_settings(entry)
+        except KeyError:
+            continue
+        mac = settings[CONF_MAC_ADDRESS]
+        added = settings[CONF_ADDED_CONNECTIONS]
+        if not isinstance(mac, str) or not isinstance(added, dict):
+            continue
+        for device_id, flag in added.items():
+            if flag and isinstance(device_id, str):
+                copied.add((device_id, mac))
+    return copied
+
+
 def _linked_pairs(hass: HomeAssistant) -> set[str]:
     """Pairs already covered by a Device Linker entry."""
     pairs: set[str] = set()
@@ -398,12 +876,7 @@ def plan_entry_data(
         not in (connections_a if device_id == device_a_id else connections_b)
         for device_id in linked_ids
     }
-    return {
-        CONF_MAIN_DEVICE_ID: main_id,
-        CONF_LINKED_DEVICE_IDS: linked_ids,
-        CONF_MAC_ADDRESS: mac,
-        CONF_ADDED_CONNECTIONS: added,
-    }
+    return _link_payload(main_id, linked_ids, mac, added, ORIGIN_MANUAL)
 
 
 async def async_load_settings(hass: HomeAssistant) -> SuggestionSettings:
@@ -415,31 +888,68 @@ async def async_load_settings(hass: HomeAssistant) -> SuggestionSettings:
 
 
 async def async_apply_suggestion_preferences(
-    hass: HomeAssistant, user_input: dict[str, Any]
+    hass: HomeAssistant, user_input: dict[str, Any], *, scan: bool = True
 ) -> None:
     """Save suggestion fields submitted from an options form."""
-    threshold = _clamp_threshold(
-        user_input.get(CONF_SUGGESTION_THRESHOLD, DEFAULT_SUGGESTION_THRESHOLD)
-    )
-    match_hardware = bool(user_input.get(CONF_MATCH_HARDWARE, True))
-    match_names = bool(user_input.get(CONF_MATCH_NAMES, True))
     manager = async_get_manager(hass)
+    current = (
+        manager.settings if manager is not None else await async_load_settings(hass)
+    )
+    threshold = _clamp_threshold(
+        user_input.get(CONF_SUGGESTION_THRESHOLD, current.threshold)
+    )
+    match_hardware = bool(user_input.get(CONF_MATCH_HARDWARE, current.match_hardware))
+    match_names = bool(user_input.get(CONF_MATCH_NAMES, current.match_names))
+    auto_link = bool(user_input.get(CONF_AUTO_LINK, current.auto_link))
+    auto_link_threshold = _clamp_threshold(
+        user_input.get(CONF_AUTO_LINK_THRESHOLD, current.auto_link_threshold)
+    )
     if manager is not None:
         await manager.async_update_settings(
             threshold=threshold,
             match_hardware=match_hardware,
             match_names=match_names,
+            auto_link=auto_link,
+            auto_link_threshold=auto_link_threshold,
+            scan=scan,
         )
+        return
+    store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+    await _save_settings(
+        store,
+        replace(
+            current,
+            threshold=threshold,
+            match_hardware=match_hardware,
+            match_names=match_names,
+            auto_link=auto_link,
+            auto_link_threshold=auto_link_threshold,
+        ),
+    )
+
+
+async def async_remember_unlinked(hass: HomeAssistant, pairs: set[str]) -> None:
+    """Persist pairs the user unlinked, even if the manager has already stopped.
+
+    Removing the last config entry unloads the manager before Home Assistant
+    calls ``async_remove_entry``. The store write still has to happen, or the
+    next setup will link those devices again.
+    """
+    pairs = {pair for pair in pairs if pair}
+    if not pairs:
+        return
+    manager = async_get_manager(hass)
+    if manager is not None:
+        await manager.async_remember_unlinked(pairs)
         return
     store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
     current = await _load_settings(store)
     await _save_settings(
         store,
-        SuggestionSettings(
-            threshold=threshold,
-            match_hardware=match_hardware,
-            match_names=match_names,
-            dismissed=current.dismissed,
+        replace(
+            current,
+            unlinked=current.unlinked | pairs,
+            announced=current.announced - pairs,
         ),
     )
 
@@ -452,20 +962,31 @@ def _clamp_threshold(value: object) -> float:
     return min(SUGGESTION_THRESHOLD_MAX, max(SUGGESTION_THRESHOLD_MIN, number))
 
 
+def _string_set(stored: dict[str, Any], key: str) -> frozenset[str]:
+    raw = stored.get(key, [])
+    if not isinstance(raw, list):
+        return frozenset()
+    return frozenset(item for item in raw if isinstance(item, str))
+
+
 async def _load_settings(store: Store[dict[str, Any]]) -> SuggestionSettings:
+    """Load preferences. Keys added in 1.3.0 default when a 1.2 store omits them."""
     stored = await store.async_load()
     if not isinstance(stored, dict):
         return SuggestionSettings()
-    dismissed = stored.get("dismissed", [])
-    if not isinstance(dismissed, list):
-        dismissed = []
     return SuggestionSettings(
         threshold=_clamp_threshold(
             stored.get("threshold", DEFAULT_SUGGESTION_THRESHOLD)
         ),
         match_hardware=bool(stored.get("match_hardware", True)),
         match_names=bool(stored.get("match_names", True)),
-        dismissed=frozenset(item for item in dismissed if isinstance(item, str)),
+        auto_link=bool(stored.get("auto_link", True)),
+        auto_link_threshold=_clamp_threshold(
+            stored.get("auto_link_threshold", DEFAULT_AUTO_LINK_THRESHOLD)
+        ),
+        dismissed=_string_set(stored, "dismissed"),
+        unlinked=_string_set(stored, "unlinked"),
+        announced=_string_set(stored, "announced"),
     )
 
 
@@ -477,7 +998,11 @@ async def _save_settings(
             "threshold": settings.threshold,
             "match_hardware": settings.match_hardware,
             "match_names": settings.match_names,
+            "auto_link": settings.auto_link,
+            "auto_link_threshold": settings.auto_link_threshold,
             "dismissed": sorted(settings.dismissed),
+            "unlinked": sorted(settings.unlinked),
+            "announced": sorted(settings.announced),
         }
     )
 

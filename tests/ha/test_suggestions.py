@@ -30,6 +30,20 @@ from homeassistant.util import dt as dt_util
 MAC = "aa:bb:cc:dd:ee:ff"
 
 
+async def _disable_auto_link(hass) -> None:
+    """Keep the confirm-each-suggestion path these tests were written for."""
+    manager = async_get_manager(hass)
+    assert manager is not None
+    settings = manager.settings
+    await manager.async_update_settings(
+        threshold=settings.threshold,
+        match_hardware=settings.match_hardware,
+        match_names=settings.match_names,
+        auto_link=False,
+        auto_link_threshold=settings.auto_link_threshold,
+    )
+
+
 async def _anchor(hass):
     """Set up one real Device Linker entry so the suggestion manager is running.
 
@@ -97,6 +111,7 @@ async def test_format_mac_and_normalize_mac_agree(hass) -> None:
 async def test_unifi_mac_suggests_a_device_in_another_area(hass) -> None:
     """A UniFi client and a Shelly with the same MAC are suggested across areas."""
     entry = await _anchor(hass)
+    await _disable_auto_link(hass)
     unifi = _register(
         hass,
         domain="unifi",
@@ -186,6 +201,7 @@ async def test_disabled_device_is_not_suggested(hass) -> None:
 async def test_dismissal_survives_another_scan(hass) -> None:
     """Ignore stores the pair, and a later scan does not offer it again."""
     await _anchor(hass)
+    await _disable_auto_link(hass)
     unifi = _register(
         hass,
         domain="unifi",
@@ -260,6 +276,7 @@ async def test_registry_update_rescans_after_the_debounce(hass) -> None:
 async def test_rescan_action_and_option_switches(hass) -> None:
     """The rescan action runs a scan, and options can turn signals off."""
     entry = await _anchor(hass)
+    await _disable_auto_link(hass)
     _register(
         hass,
         domain="unifi",
@@ -286,6 +303,8 @@ async def test_rescan_action_and_option_switches(hass) -> None:
         CONF_SUGGESTION_THRESHOLD: 0.9,
         CONF_MATCH_HARDWARE: False,
         CONF_MATCH_NAMES: True,
+        "auto_link": False,
+        "auto_link_threshold": 0.95,
     }
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input=submitted

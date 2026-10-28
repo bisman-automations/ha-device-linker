@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import SOURCE_IGNORE, ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
@@ -14,10 +14,14 @@ from .const import (
     CONF_ADDED_CONNECTIONS,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
+    CONF_MAIN_DEVICE_ID,
+    CONF_ORIGIN,
     DATA_MANAGER,
     DOMAIN,
+    ORIGIN_MANUAL,
 )
-from .manager import SuggestionManager, entry_is_link
+from .manager import SuggestionManager, async_remember_unlinked, entry_is_link
+from .matching import pairs_among
 from .registry import get_device, get_entry_settings
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,25 +65,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     @callback
     def _restore_owned_links(event: Event) -> None:
-        """Restore only connections Device Linker originally added."""
+        """Restore only connections Device Linker originally added.
+
+        Read the entry on each event. Configure and automatic linking update
+        the entry in place, and a listener closed over the ids from setup
+        would ignore devices added later.
+        """
         device_id = event.data.get("device_id")
-        if device_id not in linked_device_ids or not added_connections.get(
-            device_id, False
-        ):
+        if not isinstance(device_id, str):
             return
+        current_entry = hass.config_entries.async_get_entry(entry.entry_id)
+        if current_entry is None:
+            return
+        try:
+            current_settings = get_entry_settings(current_entry)
+        except KeyError:
+            return
+        current_added = dict(current_settings[CONF_ADDED_CONNECTIONS])
+        if device_id not in current_settings[
+            CONF_LINKED_DEVICE_IDS
+        ] or not current_added.get(device_id, False):
+            return
+        current_connection = (
+            dr.CONNECTION_NETWORK_MAC,
+            current_settings[CONF_MAC_ADDRESS],
+        )
         current = get_device(registry, device_id)
-        if current is None or connection in current.connections:
+        if current is None or current_connection in current.connections:
             return
         try:
             registry.async_update_device(
                 current.id,
-                new_connections=current.connections | {connection},
+                new_connections=current.connections | {current_connection},
             )
         except dr.DeviceConnectionCollisionError:
             _LOGGER.warning(
                 "Could not restore linked MAC %s on device %s because it is already "
                 "assigned to another device in the same integration",
-                settings[CONF_MAC_ADDRESS],
+                current_settings[CONF_MAC_ADDRESS],
                 device_id,
             )
 
@@ -136,6 +159,21 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     settings = get_entry_settings(entry)
     connection = (dr.CONNECTION_NETWORK_MAC, settings[CONF_MAC_ADDRESS])
     added_connections = dict(settings[CONF_ADDED_CONNECTIONS])
+    # Remember every pair in the entry before the devices are free again.
+    # Otherwise the next scan treats the unlink as a new match.
+    await async_remember_unlinked(
+        hass,
+        pairs_among(
+            settings[CONF_MAIN_DEVICE_ID]
+            if isinstance(settings[CONF_MAIN_DEVICE_ID], str)
+            else None,
+            [
+                device_id
+                for device_id in settings[CONF_LINKED_DEVICE_IDS]
+                if isinstance(device_id, str)
+            ],
+        ),
+    )
 
     for device_id in settings[CONF_LINKED_DEVICE_IDS]:
         if not added_connections.get(device_id, False):
@@ -150,6 +188,23 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     manager = async_get_manager_if_running(hass)
     if manager is not None:
         await manager.async_scan()
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Bring a 1.2 entry up to version 2.
+
+    The link itself is unchanged. ``origin`` records that a person created it,
+    so automatic linking does not describe it as an automatic entry. Ignored
+    discoveries store no link and gain no origin.
+    """
+    if config_entry.version > 1:
+        return True
+    data = dict(config_entry.data)
+    if config_entry.source != SOURCE_IGNORE and CONF_ORIGIN not in data:
+        data[CONF_ORIGIN] = ORIGIN_MANUAL
+    hass.config_entries.async_update_entry(config_entry, data=data, version=2)
+    _LOGGER.debug("Migrated config entry %s to version 2", config_entry.entry_id)
+    return True
 
 
 async def _scan_after_setup(manager: SuggestionManager) -> None:

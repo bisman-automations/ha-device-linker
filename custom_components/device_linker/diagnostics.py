@@ -13,8 +13,14 @@ from .const import (
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
     CONF_MAIN_DEVICE_ID,
+    CONF_ORIGIN,
 )
-from .manager import async_get_manager, async_load_settings, entry_is_link
+from .manager import (
+    async_get_manager,
+    async_load_settings,
+    auto_linked_summaries,
+    entry_is_link,
+)
 from .registry import get_entry_settings
 
 TO_REDACT = {CONF_MAC_ADDRESS, "mac"}
@@ -45,15 +51,21 @@ async def async_get_config_entry_diagnostics(
                 "main_device_set": bool(settings[CONF_MAIN_DEVICE_ID]),
                 "linked_device_count": len(settings[CONF_LINKED_DEVICE_IDS]),
                 "owned_connection_count": sum(1 for flag in owned if flag),
+                CONF_ORIGIN: settings[CONF_ORIGIN],
                 CONF_MAC_ADDRESS: settings[CONF_MAC_ADDRESS],
             },
             "suggestions": {
                 "threshold": preferences.threshold,
                 "match_hardware": preferences.match_hardware,
                 "match_names": preferences.match_names,
+                "auto_link": preferences.auto_link,
+                "auto_link_threshold": preferences.auto_link_threshold,
                 "dismissed_count": len(preferences.dismissed),
+                "unlinked_count": len(preferences.unlinked),
                 "count": len(manager.suggestions) if manager is not None else 0,
+                "last_scan": manager.last_scan if manager is not None else None,
                 "items": suggestions,
+                "auto_linked": auto_linked_summaries(hass),
             },
         },
         TO_REDACT,

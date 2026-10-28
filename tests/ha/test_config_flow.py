@@ -115,6 +115,7 @@ async def test_manual_mac_entry_links_a_device(
     assert result["data"][CONF_LINKED_DEVICE_IDS] == [target.id]
     assert result["data"][CONF_MAC_ADDRESS] == "aa:bb:cc:dd:ee:ff"
     assert result["data"][CONF_ADDED_CONNECTIONS] == {target.id: True}
+    assert result["data"]["origin"] == "manual"
 
 
 async def test_options_flow_loads_for_legacy_multiselect_entry(

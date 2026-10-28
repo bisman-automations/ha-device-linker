@@ -34,6 +34,7 @@ def test_legacy_pair_reads_the_peer_as_the_main_device(hass) -> None:
     assert settings[CONF_LINKED_DEVICE_IDS] == ["target-device"]
     assert settings[CONF_MAC_ADDRESS] == "aa:bb:cc:dd:ee:ff"
     assert settings[CONF_ADDED_CONNECTIONS] == {"target-device": True}
+    assert settings["origin"] == "manual"
 
 
 def test_legacy_multiselect_does_not_claim_connections_it_did_not_track(hass) -> None:

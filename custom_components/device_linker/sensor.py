@@ -12,7 +12,12 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .manager import SuggestionManager, async_get_manager, entry_is_link
+from .manager import (
+    SuggestionManager,
+    async_get_manager,
+    auto_linked_summaries,
+    entry_is_link,
+)
 
 _DEVICE_INFO = DeviceInfo(
     identifiers={(DOMAIN, "suggestions")},
@@ -59,9 +64,17 @@ class SuggestionSensor(SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Each suggestion's devices, match reason, score, and areas.
+        """Suggestions still waiting, plus what was linked automatically.
 
-        MAC addresses are left out. The reason is ``mac``, ``identifier``,
-        or ``name``.
+        ``suggestions`` lists pairs that were not linked on their own. The
+        count can stay at 0 after a scan when every match was linked, which
+        is why ``last_scan`` is included: Home Assistant does not move
+        "last changed" when the count stays 0. ``auto_linked`` lists
+        automatic entries. MAC addresses are left out. The reason is
+        ``mac``, ``identifier``, or ``name``.
         """
-        return {"suggestions": self._manager.listed_suggestions()}
+        return {
+            "suggestions": self._manager.listed_suggestions(),
+            "auto_linked": auto_linked_summaries(self._manager.hass),
+            "last_scan": self._manager.last_scan,
+        }

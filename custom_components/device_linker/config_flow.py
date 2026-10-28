@@ -13,15 +13,19 @@ from homeassistant.helpers import device_registry as dr, selector
 
 from .const import (
     CONF_ADDED_CONNECTIONS,
+    CONF_AUTO_LINK,
+    CONF_AUTO_LINK_THRESHOLD,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
     CONF_MAIN_DEVICE_ID,
     CONF_MATCH_HARDWARE,
     CONF_MATCH_NAMES,
+    CONF_ORIGIN,
     CONF_SELECTED_MAC_ADDRESS,
     CONF_SUGGESTION_THRESHOLD,
     DOMAIN,
     MAC_PATTERN,
+    ORIGIN_MANUAL,
     REASON_IDENTIFIER,
     REASON_MAC,
     REASON_NAME,
@@ -33,28 +37,48 @@ from .manager import (
     async_apply_suggestion_preferences,
     async_get_manager,
     async_load_settings,
+    async_remember_unlinked,
     plan_entry_data,
 )
-from .registry import get_device, get_entry_settings
+from .matching import pairs_touching
+from .registry import get_device, get_entry_settings, link_title, link_unique_id
 
 MANUAL_ENTRY = "__manual_entry__"
 
 
+def _threshold_selector() -> selector.NumberSelector:
+    """Slider from 0.5 to 1 in steps of 0.05."""
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=SUGGESTION_THRESHOLD_MIN,
+            max=SUGGESTION_THRESHOLD_MAX,
+            step=SUGGESTION_THRESHOLD_STEP,
+            mode=selector.NumberSelectorMode.SLIDER,
+        )
+    )
+
+
 def _suggestion_schema(
-    threshold: float, match_hardware: bool, match_names: bool
+    threshold: float,
+    match_hardware: bool,
+    match_names: bool,
+    auto_link: bool,
+    auto_link_threshold: float,
 ) -> dict[vol.Marker, object]:
-    """Options fields for suggestion signals. The same values apply to every entry."""
+    """Options fields for suggestions and automatic linking.
+
+    The same values apply to every entry. Exact names and hardware matches
+    are linked whenever automatic linking is on. The automatic threshold
+    applies only to fuzzy names.
+    """
     return {
+        vol.Optional(CONF_AUTO_LINK, default=auto_link): selector.BooleanSelector(),
+        vol.Optional(
+            CONF_AUTO_LINK_THRESHOLD, default=auto_link_threshold
+        ): _threshold_selector(),
         vol.Optional(
             CONF_SUGGESTION_THRESHOLD, default=threshold
-        ): selector.NumberSelector(
-            selector.NumberSelectorConfig(
-                min=SUGGESTION_THRESHOLD_MIN,
-                max=SUGGESTION_THRESHOLD_MAX,
-                step=SUGGESTION_THRESHOLD_STEP,
-                mode=selector.NumberSelectorMode.SLIDER,
-            )
-        ),
+        ): _threshold_selector(),
         vol.Optional(
             CONF_MATCH_HARDWARE, default=match_hardware
         ): selector.BooleanSelector(),
@@ -65,7 +89,7 @@ def _suggestion_schema(
 class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Set a main device and link multiple related devices to its MAC."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialize flow state."""
@@ -200,7 +224,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "connection_conflict"
                 else:
                     await self.async_set_unique_id(
-                        f"{self._main_device_id or 'manual'}_{mac_address}"
+                        link_unique_id(self._main_device_id, mac_address)
                     )
                     self._abort_if_unique_id_configured()
                     return self.async_create_entry(
@@ -214,6 +238,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                                 for device in linked_devices
                                 if device is not None
                             },
+                            CONF_ORIGIN: ORIGIN_MANUAL,
                         },
                     )
 
@@ -302,8 +327,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _entry_title(main, linked_devices) -> str:
         """Build a readable title for the integration entry."""
         main_name = main.name_by_user or main.name or main.id if main else "Manual MAC"
-        count = len(linked_devices)
-        return f"Link {main_name} to {count} device{'s' if count != 1 else ''}"
+        return link_title(main_name, len(linked_devices))
 
     @staticmethod
     def _display_name(device) -> str:
@@ -525,11 +549,16 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
         errors: dict[str, str] = {}
         conflicting_devices: list[str] = []
         if user_input is not None:
-            await async_apply_suggestion_preferences(self.hass, user_input)
+            # Save the sliders even when the device form still has an error,
+            # but do not scan until removed devices are remembered. A scan
+            # before that would link them again.
+            await async_apply_suggestion_preferences(self.hass, user_input, scan=False)
             for preference_key in (
                 CONF_SUGGESTION_THRESHOLD,
                 CONF_MATCH_HARDWARE,
                 CONF_MATCH_NAMES,
+                CONF_AUTO_LINK,
+                CONF_AUTO_LINK_THRESHOLD,
             ):
                 user_input.pop(preference_key, None)
             linked_ids = list(dict.fromkeys(user_input[CONF_LINKED_DEVICE_IDS]))
@@ -554,6 +583,17 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
                 if conflicting_devices:
                     errors["base"] = "connection_conflict"
                 else:
+                    removed = [
+                        device_id
+                        for device_id in old[CONF_LINKED_DEVICE_IDS]
+                        if device_id not in linked_ids
+                    ]
+                    others = list(old[CONF_LINKED_DEVICE_IDS])
+                    if self._main_device_id:
+                        others.append(self._main_device_id)
+                    await async_remember_unlinked(
+                        self.hass, pairs_touching(removed, others)
+                    )
                     added_connections = self._reconcile_registry(
                         registry,
                         old,
@@ -561,6 +601,17 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
                         devices,
                         mac_address,
                     )
+                    main_name = (
+                        DeviceLinkerConfigFlow._display_name(main)
+                        if main
+                        else "Manual MAC"
+                    )
+                    self.hass.config_entries.async_update_entry(
+                        entry, title=link_title(main_name, len(linked_ids))
+                    )
+                    manager = async_get_manager(self.hass)
+                    if manager is not None:
+                        await manager.async_scan()
                     return self.async_create_entry(
                         title="",
                         data={
@@ -568,6 +619,7 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
                             CONF_LINKED_DEVICE_IDS: linked_ids,
                             CONF_MAC_ADDRESS: mac_address,
                             CONF_ADDED_CONNECTIONS: added_connections,
+                            CONF_ORIGIN: old[CONF_ORIGIN],
                         },
                     )
 
@@ -622,9 +674,17 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlowWithReload):
         settings = await async_load_settings(self.hass)
         schema.update(
             _suggestion_schema(
-                settings.threshold, settings.match_hardware, settings.match_names
+                settings.threshold,
+                settings.match_hardware,
+                settings.match_names,
+                settings.auto_link,
+                settings.auto_link_threshold,
             )
         )
+        if user_input is not None and errors:
+            manager = async_get_manager(self.hass)
+            if manager is not None:
+                await manager.async_scan()
         return self.async_show_form(
             step_id="configure",
             data_schema=vol.Schema(schema),
