@@ -59,6 +59,7 @@ async def async_get_config_entry_diagnostics(
                 "match_names": preferences.match_names,
                 "auto_link": preferences.auto_link,
                 "auto_link_similar": preferences.auto_link_similar,
+                "include_services": (preferences.include_services),
                 "auto_link_threshold": preferences.auto_link_threshold,
                 "dismissed_count": len(preferences.dismissed),
                 "unlinked_count": len(preferences.unlinked),

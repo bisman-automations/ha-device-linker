@@ -30,6 +30,7 @@ from .const import (
     CONF_AUTO_LINK_SIMILAR,
     CONF_AUTO_LINK_THRESHOLD,
     CONF_HUB,
+    CONF_INCLUDE_SERVICES,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
     CONF_MAIN_DEVICE_ID,
@@ -126,6 +127,7 @@ def _device_options(
     exclude_device_id: str | None = None,
     exclude_config_entry_id: str | None = None,
     include_mac: bool = False,
+    include_services: bool = False,
 ) -> list[selector.SelectOptionDict]:
     """Devices of other integrations, labelled with the integration."""
     registry = dr.async_get(hass)
@@ -139,7 +141,9 @@ def _device_options(
                 and device.config_entry_id == exclude_config_entry_id
             ):
                 continue
-            if get_device(registry, device.id) is None or is_service(device):
+            if get_device(registry, device.id) is None or is_service(
+                hass, device, include_services=include_services
+            ):
                 continue
             options.append(
                 selector.SelectOptionDict(
@@ -246,6 +250,9 @@ def _suggestion_schema(settings) -> dict[vol.Marker, object]:
             selector.BooleanSelector()
         ),
         vol.Optional(CONF_AUTO_LINK_SIMILAR, default=settings.auto_link_similar): (
+            selector.BooleanSelector()
+        ),
+        vol.Optional(CONF_INCLUDE_SERVICES, default=settings.include_services): (
             selector.BooleanSelector()
         ),
         vol.Optional(
@@ -474,7 +481,13 @@ class LinkSubentryFlow(ConfigSubentryFlow):
 
         options = [
             selector.SelectOptionDict(value=MANUAL_ENTRY, label="Manual MAC entry"),
-            *_device_options(self.hass, include_mac=True),
+            *_device_options(
+                self.hass,
+                include_mac=True,
+                include_services=(
+                    await async_load_settings(self.hass)
+                ).include_services,
+            ),
         ]
         if len(options) == 1:
             return self.async_abort(reason="no_devices")
@@ -526,6 +539,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
 
         options = _device_options(
             self.hass,
+            include_services=(await async_load_settings(self.hass)).include_services,
             exclude_device_id=self._main_device_id,
             exclude_config_entry_id=main.config_entry_id if main else None,
         )
@@ -626,7 +640,10 @@ class LinkSubentryFlow(ConfigSubentryFlow):
         old_mac = str(old[CONF_MAC_ADDRESS])
         old_added = dict(old[CONF_ADDED_CONNECTIONS])
         copied = {d for d in old_ids if old_added.get(d)}
-        options = _device_options(self.hass)
+        options = _device_options(
+            self.hass,
+            include_services=(await async_load_settings(self.hass)).include_services,
+        )
         available = {option["value"] for option in options}
 
         def own_macs(device: dr.DeviceEntry) -> list[str]:

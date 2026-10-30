@@ -31,6 +31,9 @@ CONF_AUTO_LINK_THRESHOLD = "auto_link_threshold"
 # Also link fuzzy names automatically when one name is the other plus only
 # filler words ("Deck Camera" and "G4 Deck Camera"). Added in 2.0.0.
 CONF_AUTO_LINK_SIMILAR = "auto_link_similar"
+# Also link services: devices marked as services and every device of a
+# service integration (Music Assistant players). Off by default.
+CONF_INCLUDE_SERVICES = "include_services"
 CONF_ORIGIN = "origin"
 ORIGIN_MANUAL = "manual"
 ORIGIN_AUTO = "auto"

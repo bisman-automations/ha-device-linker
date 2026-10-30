@@ -1,6 +1,10 @@
 """Links that share an ID other than a MAC, already-linked devices, and link devices."""
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    MockModule,
+    mock_integration,
+)
 
 from custom_components.device_linker.const import (
     CONF_ADDED_CONNECTIONS,
@@ -12,6 +16,7 @@ from custom_components.device_linker.const import (
     SERVICE_RESCAN,
 )
 from custom_components.device_linker.manager import (
+    async_apply_suggestion_preferences,
     async_get_manager,
     link_payload,
     save_link,
@@ -255,3 +260,68 @@ async def test_an_automatic_link_with_a_service_is_cleaned_up(hass) -> None:
         routine.id
     ).connections
     assert (dr.CONNECTION_NETWORK_MAC, MAC) in registry.async_get(blind.id).connections
+
+
+async def test_players_of_a_service_integration_are_not_offered(hass) -> None:
+    """Music Assistant is a service; its players are devices only on paper."""
+    mock_integration(
+        hass,
+        MockModule("player_service", partial_manifest={"integration_type": "service"}),
+    )
+    hub = await _setup_hub(hass)
+    player_config = MockConfigEntry(domain="player_service")
+    player_config.add_to_hass(hass)
+    speaker_config = MockConfigEntry(domain="speaker_hardware")
+    speaker_config.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    player = registry.async_get_or_create(
+        config_entry_id=player_config.entry_id,
+        identifiers={("player_service", "family_room")},
+        name="Family Room Apple TV",
+    )
+    speaker = registry.async_get_or_create(
+        config_entry_id=speaker_config.entry_id,
+        identifiers={("speaker_hardware", "family_room")},
+        connections={(dr.CONNECTION_NETWORK_MAC, MAC)},
+        name="Family Room Apple TV",
+    )
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+    assert links(hass) == []
+    manager = async_get_manager(hass)
+    assert not any(
+        player.id in {item.device_id_a, item.device_id_b}
+        for item in manager.suggestions
+    )
+    result = await _add_link(hass, hub)
+    schema = result["data_schema"].schema
+    key = next(k for k in schema if str(k) == CONF_MAIN_DEVICE_ID)
+    offered = {option["value"] for option in schema[key].config["options"]}
+    assert speaker.id in offered
+    assert player.id not in offered
+
+
+async def test_include_services_offers_them_again(hass) -> None:
+    """With Include services on, players and routines can be linked."""
+    mock_integration(
+        hass,
+        MockModule("player_service", partial_manifest={"integration_type": "service"}),
+    )
+    hub = await _setup_hub(hass)
+    player_config = MockConfigEntry(domain="player_service")
+    player_config.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    player = registry.async_get_or_create(
+        config_entry_id=player_config.entry_id,
+        identifiers={("player_service", "family_room")},
+        name="Family Room Apple TV",
+    )
+    curtain, routine = await _service_case(hass)
+
+    await async_apply_suggestion_preferences(hass, {"include_services": True})
+    assert async_get_manager(hass).settings.include_services is True
+    result = await _add_link(hass, hub)
+    schema = result["data_schema"].schema
+    key = next(k for k in schema if str(k) == CONF_MAIN_DEVICE_ID)
+    offered = {option["value"] for option in schema[key].config["options"]}
+    assert {player.id, routine.id, curtain.id} <= offered

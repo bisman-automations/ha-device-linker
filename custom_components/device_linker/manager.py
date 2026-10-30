@@ -39,6 +39,7 @@ from .const import (
     CONF_AUTO_LINK,
     CONF_AUTO_LINK_SIMILAR,
     CONF_AUTO_LINK_THRESHOLD,
+    CONF_INCLUDE_SERVICES,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
     CONF_MAIN_DEVICE_ID,
@@ -103,6 +104,7 @@ class SuggestionSettings:
     auto_link: bool = True
     auto_link_threshold: float = DEFAULT_AUTO_LINK_THRESHOLD
     auto_link_similar: bool = True
+    include_services: bool = False
     dismissed: frozenset[str] = frozenset()
     unlinked: frozenset[str] = frozenset()
     announced: frozenset[str] = frozenset()
@@ -216,7 +218,10 @@ class SuggestionManager:
     async def _async_scan_once(self) -> None:
         blocked = set(self._settings.dismissed) | set(self._settings.unlinked)
         matches = suggest(
-            _device_views(self.hass),
+            _device_views(
+                self.hass,
+                include_services=(self._settings.include_services),
+            ),
             linked_pairs=_linked_pairs(self.hass),
             dismissed=blocked,
             threshold=self._settings.threshold,
@@ -257,6 +262,7 @@ class SuggestionManager:
         auto_link: bool,
         auto_link_threshold: float,
         auto_link_similar: bool | None = None,
+        include_services: bool | None = None,
         scan: bool = True,
     ) -> None:
         """Store new preferences and, by default, scan again."""
@@ -271,6 +277,11 @@ class SuggestionManager:
                 self._settings.auto_link_similar
                 if auto_link_similar is None
                 else bool(auto_link_similar)
+            ),
+            include_services=(
+                self._settings.include_services
+                if include_services is None
+                else bool(include_services)
             ),
         )
         await _save_settings(self._store, self._settings)
@@ -718,7 +729,9 @@ def _iter_devices(registry: dr.DeviceRegistry):
             yield item
 
 
-def _device_views(hass: HomeAssistant) -> list[DeviceView]:
+def _device_views(
+    hass: HomeAssistant, *, include_services: bool = False
+) -> list[DeviceView]:
     """Snapshot registry devices that can take part in a suggestion."""
     registry = dr.async_get(hass)
     areas = ar.async_get(hass)
@@ -727,7 +740,11 @@ def _device_views(hass: HomeAssistant) -> list[DeviceView]:
         if (
             device.disabled_by is not None
             or getattr(device, "is_composite_device", False)
-            or is_service(device)
+            or is_service(
+                hass,
+                device,
+                include_services=include_services,
+            )
         ):
             continue
         if not device.config_entry_id:
@@ -833,6 +850,9 @@ async def async_apply_suggestion_preferences(
     auto_link_similar = bool(
         user_input.get(CONF_AUTO_LINK_SIMILAR, current.auto_link_similar)
     )
+    include_services = bool(
+        user_input.get(CONF_INCLUDE_SERVICES, current.include_services)
+    )
     if manager is not None:
         await manager.async_update_settings(
             threshold=threshold,
@@ -841,6 +861,7 @@ async def async_apply_suggestion_preferences(
             auto_link=auto_link,
             auto_link_threshold=auto_link_threshold,
             auto_link_similar=auto_link_similar,
+            include_services=include_services,
             scan=scan,
         )
         return
@@ -855,6 +876,7 @@ async def async_apply_suggestion_preferences(
             auto_link=auto_link,
             auto_link_threshold=auto_link_threshold,
             auto_link_similar=auto_link_similar,
+            include_services=include_services,
         ),
     )
 
@@ -916,6 +938,7 @@ async def _load_settings(store: Store[dict[str, Any]]) -> SuggestionSettings:
             stored.get("auto_link_threshold", DEFAULT_AUTO_LINK_THRESHOLD)
         ),
         auto_link_similar=bool(stored.get("auto_link_similar", True)),
+        include_services=bool(stored.get("include_services", False)),
         dismissed=_string_set(stored, "dismissed"),
         unlinked=_string_set(stored, "unlinked"),
         announced=_string_set(stored, "announced"),
@@ -933,6 +956,7 @@ async def _save_settings(
             "auto_link": settings.auto_link,
             "auto_link_threshold": settings.auto_link_threshold,
             "auto_link_similar": settings.auto_link_similar,
+            "include_services": settings.include_services,
             "dismissed": sorted(settings.dismissed),
             "unlinked": sorted(settings.unlinked),
             "announced": sorted(settings.announced),

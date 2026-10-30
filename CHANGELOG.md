@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-10-30
+
+### Added
+
+- **Include services** under **Matching settings** (off by default). Turn it on to let services, such as Daily Routine routines and Music Assistant players, be suggested, linked automatically and chosen in **Add link** like any other device. While it's on, automatic links that include a service are kept.
+
+### Fixed
+
+- **Music Assistant players are no longer offered or linked.** Music Assistant is a service, but it registers each player as an ordinary device, so Device Linker still suggested them and listed them in **Add link** and **Edit link**. Every device of a service integration is now treated as a service and left out, unless **Include services** is on. Automatic links that already include one lose it the next time Home Assistant starts; links you made yourself are left as they are.
+
 ## [2.4.1] - 2026-10-30
 
 ### Changed
@@ -139,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.5.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.2.0...v2.3.0

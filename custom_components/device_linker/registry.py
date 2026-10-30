@@ -13,6 +13,7 @@ from homeassistant.helpers.device_registry import (
     DeviceRegistry,
     format_mac,
 )
+from homeassistant.loader import LoaderError, async_get_loaded_integration
 
 from .const import (
     CONF_ADDED_CONNECTION,
@@ -98,14 +99,36 @@ _PARTIAL_MAC = re.compile(r"[0-9A-Fa-f]{1,2}(?:[:-][0-9A-Fa-f]{0,2})+")
 MAX_SHARED_ID_LENGTH = 100
 
 
-def is_service(device: DeviceEntry) -> bool:
-    """Whether this is a service (an integration's own helper), not hardware.
+def is_service(
+    hass: HomeAssistant,
+    device: DeviceEntry,
+    *,
+    include_services: bool = False,
+) -> bool:
+    """Whether this is a service (software), not hardware.
 
-    Daily Routine's routines, Ford Assistant's vehicle helper and Device
-    Linker's own devices are services. Only devices are linked; services that
-    belong with a device link themselves.
+    That is a device marked as a service (Daily Routine's routines, Ford
+    Assistant's vehicle helper, Device Linker's own device), or any device of
+    an integration that is itself a service, such as Music Assistant, whose
+    players are registered as ordinary devices. Only hardware is linked;
+    services that belong with a device link themselves.
+
+    With ``include_services`` (the Include services setting, off by default)
+    nothing counts as a service, so every device can be linked. Device
+    Linker's own device is never a candidate either way.
     """
-    return device.entry_type is DeviceEntryType.SERVICE
+    if include_services:
+        return False
+    if device.entry_type is DeviceEntryType.SERVICE:
+        return True
+    entry = hass.config_entries.async_get_entry(device.config_entry_id)
+    if entry is None:
+        return False
+    try:
+        integration = async_get_loaded_integration(hass, entry.domain)
+    except LoaderError:
+        return False
+    return integration.integration_type == "service"
 
 
 def normalize_link_value(raw: object) -> str | None:

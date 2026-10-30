@@ -42,7 +42,7 @@ from .const import (
     ORIGIN_MANUAL,
     SUBENTRY_LINK,
 )
-from .manager import SuggestionManager, async_remember_unlinked
+from .manager import SuggestionManager, async_load_settings, async_remember_unlinked
 from .matching import pairs_among, pairs_touching
 from .registry import (
     get_device,
@@ -172,7 +172,8 @@ class LinkRuntime:
                 for subentry_id, data in stored["links"].items()
                 if isinstance(data, dict) and CONF_MAC_ADDRESS in data
             }
-        _drop_services_from_automatic_links(self.hass, self.entry)
+        if not (await async_load_settings(self.hass)).include_services:
+            _drop_services_from_automatic_links(self.hass, self.entry)
         await self.async_reconcile(scan=False)
         self._unsub = self.hass.bus.async_listen(
             dr.EVENT_DEVICE_REGISTRY_UPDATED, self._restore_owned_links
@@ -335,9 +336,10 @@ def _drop_services_from_automatic_links(
         keep = [
             d
             for d in linked
-            if (device := get_device(registry, d)) is None or not is_service(device)
+            if (device := get_device(registry, d)) is None
+            or not is_service(hass, device)
         ]
-        if (main is not None and is_service(main)) or not keep:
+        if (main is not None and is_service(hass, main)) or not keep:
             hass.config_entries.async_remove_subentry(entry, subentry_id)
             continue
         if keep == linked:

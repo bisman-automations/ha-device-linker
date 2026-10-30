@@ -60,12 +60,14 @@
           "auto_link_threshold": "Automatic name similarity",
           "suggestion_threshold": "Name similarity for suggestions",
           "match_hardware": "Match MAC addresses and hardware identifiers",
-          "match_names": "Match similar names"
+          "match_names": "Match similar names",
+          "include_services": "Include services"
         },
         "data_description": {
           "auto_link_similar": "Links names like Deck Camera and G4 Deck Camera without asking. Names that differ by a brand or a place, like Living Room TV and Living Room Apple TV, still ask first.",
           "auto_link_threshold": "How alike two names must be to link them without asking.",
-          "suggestion_threshold": "How alike two names must be to show them as discovered."
+          "suggestion_threshold": "How alike two names must be to show them as discovered.",
+          "include_services": "Off: services are left out, such as Daily Routine routines and Music Assistant players, which are software rather than hardware. On: they can be suggested, linked automatically and chosen in Add link like any other device."
         }
       },
       "cleanup": {
