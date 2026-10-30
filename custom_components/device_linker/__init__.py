@@ -48,11 +48,15 @@ from .registry import (
     hub_entry,
     hub_links,
     is_hub,
+    link_item,
     link_settings,
     link_unique_id,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# A link's own device is identified by ("device_linker", "link_<subentry id>").
+LINK_DEVICE_PREFIX = "link_"
 
 PLATFORMS = ["sensor"]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -207,6 +211,7 @@ class LinkRuntime:
             await async_remember_unlinked(self.hass, unlinked)
         for settings in current.values():
             _add_owned(registry, settings)
+        _sync_link_devices(registry, self.entry, current)
         if current != self._applied:
             self._applied = current
             await self._store.async_save(
@@ -231,11 +236,20 @@ class LinkRuntime:
         if not isinstance(device_id, str) or event.data.get("action") == "remove":
             return
         registry = dr.async_get(self.hass)
-        for settings in hub_links(self.entry).values():
+        links = hub_links(self.entry)
+        involved = False
+        for settings in links.values():
+            if device_id == settings[CONF_MAIN_DEVICE_ID] or (
+                device_id in settings[CONF_LINKED_DEVICE_IDS]
+            ):
+                involved = True
             if device_id in settings[CONF_LINKED_DEVICE_IDS] and dict(
                 settings[CONF_ADDED_CONNECTIONS]
             ).get(device_id, False):
                 _add_owned(registry, settings, only=device_id)
+        if involved:
+            # A renamed device renames the link's own device.
+            _sync_link_devices(registry, self.entry, links)
 
 
 def _pairs_of(settings: dict[str, Any]) -> set[str]:
@@ -252,10 +266,14 @@ def _remove_owned(
     *,
     keep: dict[str, Any] | None,
 ) -> None:
-    """Take ``old``'s MAC off the devices it added it to, unless ``keep`` still does."""
-    connection = (dr.CONNECTION_NETWORK_MAC, old[CONF_MAC_ADDRESS])
+    """Take ``old``'s MAC or shared ID off the devices it added it to.
+
+    Devices that ``keep`` still adds the same value to are left alone.
+    """
+    value = str(old[CONF_MAC_ADDRESS])
+    field, item = link_item(value)
     still: set[str] = set()
-    if keep is not None and keep[CONF_MAC_ADDRESS] == old[CONF_MAC_ADDRESS]:
+    if keep is not None and keep[CONF_MAC_ADDRESS] == value:
         still = {
             device_id
             for device_id, flag in dict(keep[CONF_ADDED_CONNECTIONS]).items()
@@ -265,17 +283,18 @@ def _remove_owned(
         if not flag or device_id in still:
             continue
         device = get_device(registry, device_id)
-        if device is not None and connection in device.connections:
+        if device is not None and item in getattr(device, field):
             registry.async_update_device(
-                device.id, new_connections=device.connections - {connection}
+                device.id, **{f"new_{field}": set(getattr(device, field)) - {item}}
             )
 
 
 def _add_owned(
     registry: dr.DeviceRegistry, settings: dict[str, Any], only: str | None = None
 ) -> None:
-    """Add the link's MAC to each device it owns that is missing it."""
-    connection = (dr.CONNECTION_NETWORK_MAC, settings[CONF_MAC_ADDRESS])
+    """Add the link's MAC or shared ID to each device it owns that is missing it."""
+    value = str(settings[CONF_MAC_ADDRESS])
+    field, item = link_item(value)
     added = dict(settings[CONF_ADDED_CONNECTIONS])
     for device_id in settings[CONF_LINKED_DEVICE_IDS]:
         if only is not None and device_id != only:
@@ -283,19 +302,79 @@ def _add_owned(
         if not added.get(device_id, False):
             continue
         device = get_device(registry, device_id)
-        if device is None or connection in device.connections:
+        if device is None or item in getattr(device, field):
             continue
         try:
             registry.async_update_device(
-                device.id, new_connections=device.connections | {connection}
+                device.id, **{f"new_{field}": set(getattr(device, field)) | {item}}
             )
-        except dr.DeviceConnectionCollisionError:
+        except dr.DeviceCollisionError:
             _LOGGER.warning(
                 "Could not add %s to device %s because another device from that "
                 "integration already has it",
-                settings[CONF_MAC_ADDRESS],
+                value,
                 device_id,
             )
+
+
+def _link_device_identifier(subentry_id: str) -> tuple[str, str]:
+    return (DOMAIN, f"{LINK_DEVICE_PREFIX}{subentry_id}")
+
+
+def _sync_link_devices(
+    registry: dr.DeviceRegistry, entry: ConfigEntry, links: dict[str, dict[str, Any]]
+) -> None:
+    """Give each link a small device of its own, shown under the link.
+
+    It is named after the link's main device (or its first device) and
+    carries the link's MAC address or shared ID, so its page lists the main
+    device and every linked device under Linked devices. Home Assistant
+    removes it with the link.
+    """
+    for subentry_id, settings in links.items():
+        if subentry_id not in entry.subentries:
+            continue
+        value = str(settings[CONF_MAC_ADDRESS])
+        field, item = link_item(value)
+        main_id = settings[CONF_MAIN_DEVICE_ID]
+        members = [main_id] if isinstance(main_id, str) else []
+        members += [d for d in settings[CONF_LINKED_DEVICE_IDS] if isinstance(d, str)]
+        named = next(
+            (d for d in (get_device(registry, m) for m in members) if d is not None),
+            None,
+        )
+        name = (
+            (named.name_by_user or named.name or named.id)
+            if named is not None
+            else entry.subentries[subentry_id].title
+        )
+        identifier = _link_device_identifier(subentry_id)
+        device = registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            config_subentry_id=subentry_id,
+            identifiers={identifier},
+            name=name,
+            manufacturer="Device Linker",
+            model="Link",
+            entry_type=dr.DeviceEntryType.SERVICE,
+        )
+        identifiers = {identifier} | ({item} if field == "identifiers" else set())
+        connections = {item} if field == "connections" else set()
+        if (
+            device.name != name
+            or set(device.identifiers) != identifiers
+            or set(device.connections) != connections
+        ):
+            try:
+                registry.async_update_device(
+                    device.id,
+                    name=name,
+                    new_identifiers=identifiers,
+                    new_connections=connections,
+                )
+            except dr.DeviceCollisionError:
+                # Another link already shares this value; keep the device, unlinked.
+                registry.async_update_device(device.id, name=name)
 
 
 def _storable(settings: dict[str, Any]) -> dict[str, Any]:

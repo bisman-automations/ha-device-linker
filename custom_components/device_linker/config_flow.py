@@ -41,7 +41,6 @@ from .const import (
     DOMAIN,
     HUB_TITLE,
     HUB_UNIQUE_ID,
-    MAC_PATTERN,
     ORIGIN_MANUAL,
     REASON_IDENTIFIER,
     REASON_MAC,
@@ -61,12 +60,16 @@ from .manager import (
     save_link,
 )
 from .registry import (
+    already_linked,
+    device_has_link,
     get_device,
     hub_entry,
     is_hub,
+    is_mac,
     link_settings,
     link_title,
     link_unique_id,
+    normalize_link_value,
 )
 
 MANUAL_ENTRY = "__manual_entry__"
@@ -146,9 +149,16 @@ def _device_options(
 
 
 def _submitted_mac(user_input: dict[str, Any]) -> str:
-    """Return the typed MAC, or else the selected one."""
-    custom_mac = (user_input.get(CONF_MAC_ADDRESS) or "").strip()
-    return custom_mac or user_input.get(CONF_SELECTED_MAC_ADDRESS, "")
+    """The typed value, or else the selected MAC, normalized; "" when not valid.
+
+    A MAC address is returned lower-case with colons. Anything else, such as a
+    serial number or VIN, is a shared ID (see ``normalize_link_value``).
+    """
+    custom = (user_input.get(CONF_MAC_ADDRESS) or "").strip()
+    return (
+        normalize_link_value(custom or user_input.get(CONF_SELECTED_MAC_ADDRESS, ""))
+        or ""
+    )
 
 
 def _mac_schema(discovered: list[str], current: str | None = None) -> dict:
@@ -195,15 +205,15 @@ def _network_macs(*devices) -> list[str]:
 def _connection_conflicts(
     hass: HomeAssistant,
     devices,
-    connection: tuple[str, str],
+    value: str,
     *,
     allowed_ids: set[str] = frozenset(),  # type: ignore[assignment]
 ) -> list[str]:
-    """Devices that stop this MAC from being shared.
+    """Devices that stop this MAC address or shared ID from being shared.
 
     Two selected devices from one integration, or another device of that
-    integration that already has the MAC. ``allowed_ids`` are devices this
-    link already put the MAC on.
+    integration that already has it. ``allowed_ids`` are devices this link
+    already put it on.
     """
     registry = dr.async_get(hass)
     conflicts: set[str] = set()
@@ -221,7 +231,7 @@ def _connection_conflicts(
             if (
                 other.id != device.id
                 and other.id not in allowed_ids
-                and connection in other.connections
+                and device_has_link(other, value)
             ):
                 conflicts.update(_device_labels(hass, [other]))
     return sorted(conflicts, key=str.casefold)
@@ -358,26 +368,30 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             mac = _submitted_mac(user_input)
-            if not mac or not MAC_PATTERN.fullmatch(mac):
+            if not mac:
                 errors["base"] = "invalid_mac"
+            elif _connection_conflicts(self.hass, [device_a, device_b], mac):
+                errors["base"] = "connection_conflict"
             else:
-                mac = dr.format_mac(mac)
-                connection = (dr.CONNECTION_NETWORK_MAC, mac)
-                if _connection_conflicts(self.hass, [device_a, device_b], connection):
-                    errors["base"] = "connection_conflict"
-                else:
-                    _add_link_to_hub(
-                        self.hass,
-                        hub,
-                        plan_entry_data(
-                            device_a.id,
-                            device_b.id,
-                            mac,
-                            set(device_a.connections),
-                            set(device_b.connections),
-                        ),
+                if is_mac(mac):
+                    payload = plan_entry_data(
+                        device_a.id,
+                        device_b.id,
+                        mac,
+                        set(device_a.connections),
+                        set(device_b.connections),
                     )
-                    return self.async_abort(reason="linked")
+                else:
+                    # A shared ID that neither device has: both get it.
+                    payload = link_payload(
+                        None,
+                        [device_a.id, device_b.id],
+                        mac,
+                        {device_a.id: True, device_b.id: True},
+                        ORIGIN_MANUAL,
+                    )
+                _add_link_to_hub(self.hass, hub, payload)
+                return self.async_abort(reason="linked")
 
         return self.async_show_form(
             step_id=f"discovery_{reason}",
@@ -423,7 +437,10 @@ def _add_link_to_hub(
         hub,
         existing[0] if existing is not None else None,
         link_payload(main_id, linked, mac, added, origin),
-        link_title(_display_name(main) if main else "Manual MAC", len(linked)),
+        link_title(
+            _link_name(main, [get_device(registry, device_id) for device_id in linked]),
+            len(linked),
+        ),
         unique_id,
     )
 
@@ -485,11 +502,22 @@ class LinkSubentryFlow(ConfigSubentryFlow):
         if self._main_device_id and main is None:
             return self.async_abort(reason="device_not_found")
         errors: dict[str, str] = {}
+        already_names = "none"
         if user_input is not None:
             linked_ids = list(dict.fromkeys(user_input[CONF_LINKED_DEVICE_IDS]))
             error = _check_devices(registry, main, linked_ids)
+            already = [
+                device
+                for device in (get_device(registry, d) for d in linked_ids)
+                if main is not None
+                and device is not None
+                and already_linked(main, device)
+            ]
             if error:
                 errors["base"] = error
+            elif already:
+                errors["base"] = "already_linked"
+                already_names = ", ".join(_device_labels(self.hass, already))
             else:
                 self._linked_device_ids = linked_ids
                 return await self.async_step_confirm()
@@ -510,7 +538,8 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             ),
             errors=errors,
             description_placeholders={
-                "main_name": _display_name(main) if main else "Manual MAC entry"
+                "main_name": _display_name(main) if main else "Manual entry",
+                "already_linked": already_names,
             },
         )
 
@@ -530,13 +559,12 @@ class LinkSubentryFlow(ConfigSubentryFlow):
         conflicts: list[str] = []
         if user_input is not None:
             mac = _submitted_mac(user_input)
-            if not mac or not MAC_PATTERN.fullmatch(mac):
+            if not mac:
                 errors["base"] = "invalid_mac"
             else:
-                mac = dr.format_mac(mac)
-                connection = (dr.CONNECTION_NETWORK_MAC, mac)
-                conflicts = _connection_conflicts(self.hass, devices, connection)
-                unique_id = link_unique_id(self._main_device_id, mac)
+                main_id, linked = _ends_for(main, devices, mac)
+                conflicts = _connection_conflicts(self.hass, linked, mac)
+                unique_id = link_unique_id(main_id, mac)
                 if conflicts:
                     errors["base"] = "connection_conflict"
                 elif any(
@@ -547,16 +575,15 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 else:
                     return self.async_create_entry(
                         title=link_title(
-                            _display_name(main) if main else "Manual MAC", len(devices)
+                            _link_name(main if main_id else None, linked), len(linked)
                         ),
                         data=link_payload(
-                            self._main_device_id,
-                            self._linked_device_ids,
+                            main_id,
+                            [device.id for device in linked],
                             mac,
                             {
-                                device.id: connection not in device.connections
-                                for device in devices
-                                if device is not None
+                                device.id: not device_has_link(device, mac)
+                                for device in linked
                             },
                             ORIGIN_MANUAL,
                         ),
@@ -616,10 +643,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             mac = _submitted_mac(user_input)
             if any(device is None for device in devices):
                 errors["base"] = "device_not_found"
-            elif not mac or not MAC_PATTERN.fullmatch(mac):
+            elif not mac:
                 errors["base"] = "invalid_mac"
             else:
-                mac = dr.format_mac(mac)
                 owners = [
                     device.id
                     for device in devices
@@ -643,12 +669,11 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 ):
                     return self.async_abort(reason="already_configured")
                 else:
-                    connection = (dr.CONNECTION_NETWORK_MAC, mac)
                     linked = [get_device(registry, d) for d in linked_ids]
                     conflicts = _connection_conflicts(
                         self.hass,
                         linked,
-                        connection,
+                        mac,
                         allowed_ids=copied if mac == old_mac else set(),
                     )
                     if conflicts:
@@ -661,14 +686,11 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                             if device.id in old_ids and mac == old_mac:
                                 added[device.id] = bool(old_added.get(device.id, False))
                             else:
-                                added[device.id] = connection not in device.connections
+                                added[device.id] = not device_has_link(device, mac)
                         return self.async_update_and_abort(
                             entry,
                             subentry,
-                            title=link_title(
-                                _display_name(main) if main else "Manual MAC",
-                                len(linked_ids),
-                            ),
+                            title=link_title(_link_name(main, linked), len(linked_ids)),
                             unique_id=unique_id,
                             data=link_payload(
                                 main_id, linked_ids, mac, added, str(old[CONF_ORIGIN])
@@ -718,6 +740,31 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 "conflicting_devices": ", ".join(conflicts) or "none",
             },
         )
+
+
+def _ends_for(main, devices, value: str):
+    """The main device id and the devices that get ``value``.
+
+    The main device keeps that role only when it already has the MAC address
+    or shared ID. Otherwise (a shared ID, or a MAC typed by hand) it gets the
+    value too, and the link has no main device.
+    """
+    linked = [device for device in devices if device is not None]
+    if main is None:
+        return None, linked
+    if device_has_link(main, value):
+        return main.id, linked
+    return None, [main, *linked]
+
+
+def _link_name(main, devices) -> str:
+    """The name in a link's title: the main device, else the first device."""
+    if main is not None:
+        return _display_name(main)
+    for device in devices:
+        if device is not None:
+            return _display_name(device)
+    return "Manual link"
 
 
 def _devices_selector(options) -> selector.SelectSelector:

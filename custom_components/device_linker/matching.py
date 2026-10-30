@@ -995,10 +995,17 @@ def _pair_allowed(
 def _already_share_connection(left: DeviceView, right: DeviceView) -> bool:
     """True when Home Assistant would already show these as linked devices.
 
-    A shared network-MAC or Bluetooth *connection* is already a link. The same
-    value stored only as an identifier still needs Device Linker to copy it
-    onto a connection.
+    Home Assistant links devices that share any identifier or any connection,
+    exactly as stored: the Ford integration and Ford Assistant, for example,
+    both use ``("fordpass", VIN)``. A network-MAC or Bluetooth connection is
+    also compared after normalizing the address. The same value stored only
+    as an identifier on one side and a connection on the other is not a link
+    yet; Device Linker copies it onto a connection.
     """
+    if set(left.identifiers) & set(right.identifiers):
+        return True
+    if set(left.connections) & set(right.connections):
+        return True
     left_keys = {
         (connection_type, normalize_mac(value) or value)
         for connection_type, value in left.connections

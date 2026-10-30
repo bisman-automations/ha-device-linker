@@ -112,13 +112,24 @@ async def test_add_link_links_several_devices_to_the_main_mac(hass) -> None:
             device.id
         ).connections
 
-    # The same main device and MAC can't be added twice.
+    # A device that is already linked to the main device is refused, by name.
+    (third,) = _devices(hass, ("third_integration", "Third device", None))
     result = await _add_link(hass, hub)
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: main.id}
     )
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [target.id]}
+    )
+    assert result["step_id"] == "devices"
+    assert result["errors"] == {"base": "already_linked"}
+    assert result["description_placeholders"]["already_linked"] == (
+        "Target device (target_integration)"
+    )
+
+    # The same main device and MAC can't be added twice.
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [third.id]}
     )
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], user_input={CONF_SELECTED_MAC_ADDRESS: MAC}

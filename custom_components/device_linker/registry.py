@@ -1,11 +1,17 @@
 """Device registry access, link settings, and finding the hub's links."""
 
 from collections.abc import Mapping
+import re
 from typing import Any
 
 from homeassistant.config_entries import SOURCE_IGNORE, ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceEntry, DeviceRegistry
+from homeassistant.helpers.device_registry import (
+    CONNECTION_NETWORK_MAC,
+    DeviceEntry,
+    DeviceRegistry,
+    format_mac,
+)
 
 from .const import (
     CONF_ADDED_CONNECTION,
@@ -19,6 +25,7 @@ from .const import (
     CONF_PEER_DEVICE_ID,
     CONF_TARGET_DEVICES,
     DOMAIN,
+    MAC_PATTERN,
     ORIGIN_MANUAL,
     SUBENTRY_LINK,
 )
@@ -82,6 +89,63 @@ def link_settings(data: Mapping[str, Any]) -> dict[str, object]:
         # person, and automatic linking must not relabel them.
         CONF_ORIGIN: origin,
     }
+
+
+_BARE_MAC = re.compile(r"[0-9A-Fa-f]{12}")
+_PARTIAL_MAC = re.compile(r"[0-9A-Fa-f]{1,2}(?:[:-][0-9A-Fa-f]{0,2})+")
+# Longest shared ID accepted in place of a MAC address (a VIN is 17 characters).
+MAX_SHARED_ID_LENGTH = 100
+
+
+def normalize_link_value(raw: object) -> str | None:
+    """The value a link shares: a MAC address, or another shared ID.
+
+    A MAC address (colons, hyphens or bare hex) is stored lower-case with
+    colons and becomes a network connection on each device. Anything else, such
+    as a serial number or a VIN, is stored as typed and becomes a
+    ``(device_linker, value)`` identifier. Home Assistant shows devices that
+    share any identifier or connection as linked devices.
+    """
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if not value or len(value) > MAX_SHARED_ID_LENGTH:
+        return None
+    if MAC_PATTERN.fullmatch(value) or _BARE_MAC.fullmatch(value):
+        return format_mac(value)
+    if _PARTIAL_MAC.fullmatch(value):
+        return None  # a MAC address with digits missing, not a shared ID
+    return value
+
+
+def is_mac(value: str) -> bool:
+    """Whether a stored link value is a MAC address rather than a shared ID."""
+    return bool(MAC_PATTERN.fullmatch(value)) and format_mac(value) == value
+
+
+def link_item(value: str) -> tuple[str, tuple[str, str]]:
+    """The registry field (``connections`` or ``identifiers``) and the entry it gets."""
+    if is_mac(value):
+        return "connections", (CONNECTION_NETWORK_MAC, value)
+    return "identifiers", (DOMAIN, value)
+
+
+def device_has_link(device: DeviceEntry, value: str) -> bool:
+    """Whether the device already carries this link's MAC address or shared ID."""
+    field, item = link_item(value)
+    return item in getattr(device, field)
+
+
+def already_linked(first: DeviceEntry, second: DeviceEntry) -> bool:
+    """True when Home Assistant already shows these two devices as linked.
+
+    Home Assistant links devices that share any identifier or connection,
+    such as the Ford integration and Ford Assistant both using a VIN.
+    """
+    return bool(
+        set(first.identifiers) & set(second.identifiers)
+        or set(first.connections) & set(second.connections)
+    )
 
 
 def link_unique_id(main_device_id: str | None, mac: str) -> str:

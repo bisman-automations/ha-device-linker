@@ -11,7 +11,7 @@
 [![Validate](https://github.com/bisman-automations/ha-device-linker/actions/workflows/validate.yml/badge.svg)](https://github.com/bisman-automations/ha-device-linker/actions/workflows/validate.yml)
 [![License](https://img.shields.io/github/license/bisman-automations/ha-device-linker)](LICENSE)
 
-Device Linker adds a shared MAC address connection to devices that are already in Home Assistant, so Home Assistant can show them together under **Linked devices**. It links registry entries. It does not merge devices, and it does not copy or synchronize their entities.
+Device Linker adds a shared MAC address connection (or, when the devices have no MAC in common, another shared ID such as a serial number or VIN) to devices that are already in Home Assistant, so Home Assistant can show them together under **Linked devices**. It links registry entries. It does not merge devices, and it does not copy or synchronize their entities.
 
 One device is the main device: the one that already has the MAC address, or a MAC you type in. Every other device you pick gets that same MAC address, and Home Assistant treats the shared connection as a link.
 
@@ -56,8 +56,12 @@ Select the button above, or go to **Settings > Devices & services > Add integrat
 Each link is listed under the Device Linker entry, the way a group of devices is listed under one integration. Links Device Linker finds on its own appear there by themselves. To add one yourself, open **Device Linker** under **Settings > Devices & services** and choose **Add link**:
 
 1. Choose the main device, the one that already has the MAC address. Each device is listed with its integration, and any MAC addresses already registered on it. Or choose **Manual MAC entry** when the address is not registered on a device yet.
-2. Select one or more devices to link. You can pick several. Each must come from a different config entry than the main device and than each other.
+2. Select one or more devices to link. You can pick several. Each must come from a different config entry than the main device and than each other. A device Home Assistant already shows as linked to the main device (because they share an identifier or connection, like the Ford integration and Ford Assistant sharing a VIN) is refused with its name, since there's nothing to add.
 3. Confirm the MAC address. When the main device has registered addresses, they are listed and a single address is preselected. You can still type a different address. Colons and hyphens both work (`AA:BB:CC:DD:EE:FF` or `AA-BB-CC-DD-EE-FF`).
+
+   No MAC address in common? Type another ID the devices share instead, such as a serial number or a VIN. Every device in the link gets it, the main device included, and Home Assistant shows them as linked. Something that looks like part of a MAC address (`AA:BB:CC`) is refused, so a typo doesn't become an ID by mistake.
+
+Each link gets a small device of its own, named after its main device and shown under the link on the Device Linker page. Open it to see the main device and every linked device under **Linked devices**, one click each. It also shows up under **Linked devices** on those devices' pages, as a shortcut back to the link.
 
 The confirmation screen lists the selected device names. If the address is already in use, the error names the device that has it. Choose a different MAC or a different device.
 
@@ -111,7 +115,8 @@ The **Suggestions** sensor on the Device Linker device shows how many suggestion
 ## Troubleshooting
 
 - **A device is not listed.** It has to be registered by another integration, and it has to belong to a different config entry than the main device and the other devices you selected. A device with no config entry is not offered.
-- **The devices are still separate.** Device Linker only adds a registry connection. Home Assistant shows **Linked devices** for devices that share one. It does not combine their entities, states, or controls.
+- **Two devices that are already linked were suggested.** Home Assistant links devices that share any identifier or connection. Device Linker no longer suggests those pairs; run **Rescan suggestions** and ignore any leftover discovery.
+- **The devices are still separate.** Device Linker only adds a registry connection (or a shared ID). Home Assistant shows **Linked devices** for devices that share one. It does not combine their entities, states, or controls.
 - **The MAC is already in use.** The confirm screen names the device that has it. Two devices from the same config entry cannot share a MAC address. Pick another address, or link a device from a different entry.
 - **The Suggestions sensor stays at 0.** That is expected after automatic linking: the matches became links, and a repair lists them. Open **Device Linker** under **Settings > Devices & services** and look for links named **Link … to N devices**, and the **last scan** attribute on the sensor. A UniFi client with no area is included. Two devices assigned to different areas are not matched on name alone.
 - **A device was linked and you do not want it.** Open **Device Linker**, choose **Edit link** on that link and remove the device, or delete the link. It will not be linked again. Run **Reset dismissed and unlinked** only when you want those pairs to be eligible again.

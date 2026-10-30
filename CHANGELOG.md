@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-10-30
+
+### Added
+
+- **Link with something other than a MAC address.** When the devices have no MAC address in common, type another ID they share, such as a serial number or a VIN. Every device in the link gets it, and Home Assistant shows them as linked devices. Something that looks like part of a MAC address is refused, so a typo doesn't turn into an ID.
+- **Each link shows its main device.** Every link now has a small device, named after its main device, listed under the link on the Device Linker page. Open it to reach the main device and each linked device in one click.
+
+### Fixed
+
+- Devices that Home Assistant already shows as linked, because they share an identifier or a connection (such as the Ford integration and Ford Assistant, which both use the VIN), were suggested as a new link. They aren't any more, and **Add link** refuses a device that's already linked to the main device, naming it.
+
 ## [2.1.0] - 2026-10-30
 
 ### Changed
@@ -106,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.2.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/bisman-automations/ha-device-linker/compare/v1.3.0...v2.0.0

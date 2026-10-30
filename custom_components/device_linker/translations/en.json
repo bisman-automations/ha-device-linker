@@ -10,7 +10,7 @@
         "description": "These devices share a MAC address, so this is a strong match even when they are in different areas. {device_a} ({integration_a}) is in {area_a}. {device_b} ({integration_b}) is in {area_b}.",
         "data": {
           "selected_mac_address": "MAC address",
-          "mac_address": "Manual MAC address"
+          "mac_address": "Or type a MAC address or shared ID"
         }
       },
       "discovery_identifier": {
@@ -18,7 +18,7 @@
         "description": "These devices share a hardware identifier, such as a Zigbee address, Bluetooth MAC, or serial number. {device_a} ({integration_a}) is in {area_a}. {device_b} ({integration_b}) is in {area_b}.",
         "data": {
           "selected_mac_address": "MAC address",
-          "mac_address": "Manual MAC address"
+          "mac_address": "Or type a MAC address or shared ID"
         }
       },
       "discovery_name": {
@@ -26,13 +26,13 @@
         "description": "These names are similar ({score}). A device with no area is still included, so an unassigned UniFi client can match a device in a room. Different areas are not matched. {device_a} ({integration_a}) is in {area_a}. {device_b} ({integration_b}) is in {area_b}.",
         "data": {
           "selected_mac_address": "MAC address",
-          "mac_address": "Manual MAC address"
+          "mac_address": "Or type a MAC address or shared ID"
         }
       }
     },
     "error": {
-      "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
-      "connection_conflict": "The MAC address is already assigned to {conflicting_devices}. Select a different MAC address or remove the conflicting device."
+      "invalid_mac": "Select a MAC address, or type one (such as AA:BB:CC:DD:EE:FF) or another ID both devices can share, such as a serial number or VIN.",
+      "connection_conflict": "That MAC address or ID is already used by {conflicting_devices}. Choose a different one or remove the conflicting device."
     },
     "abort": {
       "already_configured": "Device Linker is already set up. To link devices by hand, choose Add link on the Device Linker entry.",
@@ -109,37 +109,38 @@
           }
         },
         "confirm": {
-          "title": "Confirm the shared MAC address",
-          "description": "Selected devices: {linked_device_names}. Confirm the MAC address for {main_name}; it will be added to all selected devices.",
+          "title": "Confirm what the devices share",
+          "description": "Selected devices: {linked_device_names}. Choose the MAC address of {main_name} to add to all selected devices. If the devices have no MAC address in common, type another ID they share instead, such as a serial number or VIN: every device, {main_name} included, gets it, and Home Assistant shows them as linked.",
           "data": {
             "selected_mac_address": "MAC address on the main device",
-            "mac_address": "Manual MAC address"
+            "mac_address": "Or type a MAC address or shared ID"
           }
         },
         "reconfigure": {
           "title": "Edit link",
-          "description": "Every device in this link is listed, including {main_name}, the device the MAC address came from. Each address is shown with the device it came from. Choose the address to share: the device that has it becomes the main device, and the others get it. A device you remove is not linked again automatically until you run Reset dismissed and unlinked. To unlink every device, delete this link instead.",
+          "description": "Every device in this link is listed, including {main_name}, the device the MAC address came from. Each address is shown with the device it came from. Choose the address to share: the device that has it becomes the main device, and the others get it. You can also type another ID the devices share, such as a serial number or VIN. A device you remove is not linked again automatically until you run Reset dismissed and unlinked. To unlink every device, delete this link instead.",
           "data": {
             "linked_device_ids": "Devices in this link",
             "selected_mac_address": "MAC address to share",
-            "mac_address": "Manual MAC address"
+            "mac_address": "Or type a MAC address or shared ID"
           },
           "data_description": {
             "linked_device_ids": "The device the MAC address came from is included. Add or remove devices here.",
             "selected_mac_address": "Addresses the devices in this link registered themselves, with the device each came from.",
-            "mac_address": "Type an address to use one that isn't listed."
+            "mac_address": "Type a MAC address that isn't listed, or another ID such as a serial number or VIN."
           }
         }
       },
       "error": {
         "device_not_found": "A selected device is no longer available. Choose the devices again.",
         "same_config_entry": "Choose devices from different integrations. Devices from the same integration cannot share this MAC address.",
+        "already_linked": "Home Assistant already shows these as linked devices, because they share an identifier or connection: {already_linked}. Remove them from the list.",
         "no_linked_devices": "Select at least one device to link.",
-        "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
-        "connection_conflict": "The MAC address is already assigned to {conflicting_devices}. Select a different MAC address or remove the conflicting device."
+        "invalid_mac": "Select a MAC address, or type one (such as AA:BB:CC:DD:EE:FF) or another ID both devices can share, such as a serial number or VIN.",
+        "connection_conflict": "That MAC address or ID is already used by {conflicting_devices}. Choose a different one or remove the conflicting device."
       },
       "abort": {
-        "already_configured": "These devices are already linked with this MAC address.",
+        "already_configured": "These devices are already linked with this MAC address or ID.",
         "no_devices": "Add devices in another integration before configuring Device Linker.",
         "device_not_found": "A selected device is no longer available."
       }
