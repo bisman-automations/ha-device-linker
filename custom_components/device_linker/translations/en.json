@@ -2,26 +2,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "Choose the main device",
-        "description": "Choose the device that already has the MAC address, or select manual entry. Registered MAC addresses appear next to each device.",
-        "data": {
-          "main_device_id": "Main device"
-        }
-      },
-      "devices": {
-        "title": "Choose devices to link",
-        "description": "Select all devices to link to {main_name}. You can select multiple devices.",
-        "data": {
-          "linked_device_ids": "Devices to link"
-        }
-      },
-      "confirm": {
-        "title": "Confirm the shared MAC address",
-        "description": "Selected devices: {linked_device_names}. Confirm the MAC address for {main_name}; it will be added to all selected devices.",
-        "data": {
-          "selected_mac_address": "MAC address on the main device",
-          "mac_address": "Manual MAC address"
-        }
+        "title": "Set up Device Linker",
+        "description": "Device Linker links devices that are the same hardware, so Home Assistant shows them together under Linked devices. It looks for devices that share a MAC address or hardware identifier, or that have the same or a similar name, and links strong matches on its own. Each link shows under Device Linker, where you can edit or delete it, or add one by hand with Add link. Other matches show as discovered."
       },
       "discovery_mac": {
         "title": "Link {device_a} with {device_b}?",
@@ -49,41 +31,36 @@
       }
     },
     "error": {
-      "device_not_found": "A selected device is no longer available. Choose the devices again.",
-      "same_config_entry": "Choose devices from different integrations. Devices from the same integration cannot share this MAC address.",
-      "no_linked_devices": "Select at least one device to link.",
       "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
       "connection_conflict": "The MAC address is already assigned to {conflicting_devices}. Select a different MAC address or remove the conflicting device."
     },
     "abort": {
-      "already_configured": "This device group and MAC address are already configured.",
-      "no_devices": "Add devices in another integration before configuring Device Linker.",
+      "already_configured": "Device Linker is already set up. To link devices by hand, choose Add link on the Device Linker entry.",
+      "not_set_up": "Set up Device Linker first.",
+      "device_not_found": "A device in this suggestion is no longer available.",
+      "linked": "Linked. The link is under Device Linker, where you can edit or delete it.",
       "ignored": "This link suggestion was ignored and will not be offered again."
     }
   },
   "options": {
     "step": {
-      "configure": {
-        "title": "Edit linked devices",
-        "description": "The main device stays the same. Currently selected devices: {linked_device_names}. Update the MAC address or change the selection. Remove a device to unlink it; clear the selection to unlink all devices. A device you remove is not linked again until you reset dismissed and unlinked devices. Automatic linking uses a full name, or two shared words in the same area. A single shared word stays a suggestion. A device with no area is linked automatically only when the whole name matches and it is more than one word. The settings at the bottom apply to every Device Linker entry.",
+      "init": {
+        "title": "Device Linker settings",
+        "description": "These settings apply to every link. Matching MAC addresses and hardware identifiers, and devices with exactly the same name, are linked automatically when automatic linking is on. With similar names on, a name that is the other name plus words like Camera or a model number (Deck Camera and G4 Deck Camera) is linked too. Other name matches show as discovered for you to confirm. A device with no area can match a device in any area; devices in two different areas never match by name.",
         "data": {
-          "linked_device_ids": "Devices to link",
-          "selected_mac_address": "MAC address on the main device",
-          "mac_address": "Manual MAC address",
           "auto_link": "Link strong matches automatically",
+          "auto_link_similar": "Link similar names automatically",
           "auto_link_threshold": "Automatic name similarity",
           "suggestion_threshold": "Name similarity for suggestions",
           "match_hardware": "Match MAC addresses and hardware identifiers",
           "match_names": "Match similar names"
+        },
+        "data_description": {
+          "auto_link_similar": "Links names like Deck Camera and G4 Deck Camera without asking. Names that differ by a brand or a place, like Living Room TV and Living Room Apple TV, still ask first.",
+          "auto_link_threshold": "How alike two names must be to link them without asking.",
+          "suggestion_threshold": "How alike two names must be to show them as discovered."
         }
       }
-    },
-    "error": {
-      "device_not_found": "A selected device is no longer available. Choose the devices again.",
-      "same_config_entry": "Choose devices from different integrations. Devices from the same integration cannot share this MAC address.",
-      "no_linked_devices": "Select at least one device to link.",
-      "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
-      "connection_conflict": "The MAC address is already assigned to {conflicting_devices}. Select a different MAC address or remove the conflicting device."
     }
   },
   "entity": {
@@ -96,7 +73,7 @@
   "services": {
     "rescan_suggestions": {
       "name": "Rescan suggestions",
-      "description": "Look again for devices that share a MAC address or hardware identifier, or that have the same or a similar name. Strong matches are linked automatically when that option is on."
+      "description": "Look again for devices that share a MAC address or hardware identifier, or that have the same or a similar name. Strong matches are linked automatically when that setting is on."
     },
     "reset_dismissed": {
       "name": "Reset dismissed and unlinked",
@@ -106,7 +83,61 @@
   "issues": {
     "auto_linked": {
       "title": "Device Linker linked {count} devices",
-      "description": "These devices were linked automatically because they share a MAC address or a matching name. Each group is a Device Linker entry you can change or delete.\n\n{summary}\n\nTo undo one, open that entry and choose Configure, or delete the entry. A device you remove is not linked again. Run Reset dismissed and unlinked to allow those pairs again."
+      "description": "These devices were linked automatically because they share a MAC address or a matching name. Each group is a link under Device Linker.\n\n{summary}\n\nTo undo one, open Device Linker and edit or delete that link. A device you remove is not linked again. Run Reset dismissed and unlinked to allow those pairs again."
+    }
+  },
+  "config_subentries": {
+    "link": {
+      "entry_type": "Link",
+      "initiate_flow": {
+        "user": "Add link",
+        "reconfigure": "Edit link"
+      },
+      "step": {
+        "user": {
+          "title": "Choose the main device",
+          "description": "Choose the device that already has the MAC address, or select manual entry. Registered MAC addresses appear next to each device.",
+          "data": {
+            "main_device_id": "Main device"
+          }
+        },
+        "devices": {
+          "title": "Choose devices to link",
+          "description": "Select all devices to link to {main_name}. You can select multiple devices.",
+          "data": {
+            "linked_device_ids": "Devices to link"
+          }
+        },
+        "confirm": {
+          "title": "Confirm the shared MAC address",
+          "description": "Selected devices: {linked_device_names}. Confirm the MAC address for {main_name}; it will be added to all selected devices.",
+          "data": {
+            "selected_mac_address": "MAC address on the main device",
+            "mac_address": "Manual MAC address"
+          }
+        },
+        "reconfigure": {
+          "title": "Edit link",
+          "description": "The main device, {main_name}, stays the same. Change the devices that share its MAC address, or the MAC address. A device you remove is not linked again automatically until you run Reset dismissed and unlinked. To unlink every device, delete this link instead.",
+          "data": {
+            "linked_device_ids": "Devices to link",
+            "selected_mac_address": "MAC address on the main device",
+            "mac_address": "Manual MAC address"
+          }
+        }
+      },
+      "error": {
+        "device_not_found": "A selected device is no longer available. Choose the devices again.",
+        "same_config_entry": "Choose devices from different integrations. Devices from the same integration cannot share this MAC address.",
+        "no_linked_devices": "Select at least one device to link.",
+        "invalid_mac": "Select a discovered MAC address or enter a valid MAC address, such as AA:BB:CC:DD:EE:FF.",
+        "connection_conflict": "The MAC address is already assigned to {conflicting_devices}. Select a different MAC address or remove the conflicting device."
+      },
+      "abort": {
+        "already_configured": "These devices are already linked with this MAC address.",
+        "no_devices": "Add devices in another integration before configuring Device Linker.",
+        "device_not_found": "A selected device is no longer available."
+      }
     }
   }
 }

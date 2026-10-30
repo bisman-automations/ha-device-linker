@@ -149,6 +149,13 @@ _BRAND_TOKENS = frozenset(
     }
 )
 
+# Extra words that only say what kind of device it is, for
+# :func:`names_contained`. Kept apart from _GENERIC_TOKENS so name scores do
+# not change.
+_FILLER_TOKENS = frozenset({"camera", "cam", "client", "wifi", "ethernet"})
+# Short forms that mean the same word in :func:`names_contained`.
+_SHORT_FORMS = {"cam": "camera", "temp": "temperature", "tv": "television"}
+
 _REASON_RANK = {REASON_MAC: 0, REASON_IDENTIFIER: 1, REASON_NAME: 2}
 
 
@@ -314,6 +321,48 @@ def shared_distinctive_tokens(name_a: str, name_b: str, area_name: str | None) -
     if not left or not right:
         return 0
     return len(left & right)
+
+
+def names_contained(name_a: str, name_b: str, area_name: str | None) -> bool:
+    """Return whether one name is the other plus only filler words.
+
+    Every word of the shorter name (area words removed) must appear in the
+    longer one; a few common short forms count as the full word ("cam" and
+    "camera"). The words left over must be filler: generic device words
+    ("light", "camera"), numbers, or model codes that mix letters and digits
+    ("g4"). "Deck Camera" and "G4 Deck Camera" qualify.
+    "Garage Door" and "Garage Camera" do not, and neither do "Living Room TV"
+    and "Living Room Apple TV": a leftover brand or place word can mean a
+    different device.
+    """
+    ignored = area_tokens(area_name)
+    left = [token for token in fold_name(name_a).split() if token not in ignored]
+    right = [token for token in fold_name(name_b).split() if token not in ignored]
+    short, long = sorted((left, right), key=len)
+    if not short:
+        return False
+    remaining = list(long)
+    for token in short:
+        found = next(
+            (other for other in remaining if _same_word(token, other)),
+            None,
+        )
+        if found is None:
+            return False
+        remaining.remove(found)
+    return all(_filler_word(token) for token in remaining)
+
+
+def _same_word(left: str, right: str) -> bool:
+    return _SHORT_FORMS.get(left, left) == _SHORT_FORMS.get(right, right)
+
+
+def _filler_word(token: str) -> bool:
+    if token in _GENERIC_TOKENS or token in _FILLER_TOKENS or token.isdigit():
+        return True
+    return any(char.isdigit() for char in token) and any(
+        char.isalpha() for char in token
+    )
 
 
 def name_similarity(name_a: str, name_b: str, area_name: str | None) -> float:
@@ -567,6 +616,7 @@ def plan_auto_links(
     *,
     enabled: bool,
     threshold: float,
+    similar_names: bool = False,
 ) -> list[AutoLinkPlan]:
     """Group matches that should be linked without asking.
 
@@ -575,7 +625,10 @@ def plan_auto_links(
     exact name when either device has no area (a bare "TV"). A fuzzy name is
     included when the devices are both assigned to the same area, they share
     at least two distinctive words, and the score reaches ``threshold``.
-    Each plan is one anchor device plus the MAC already on it. A device is
+    With ``similar_names``, a fuzzy name is also included when one name is
+    the other plus only filler words (:func:`names_contained`), the score
+    reaches ``threshold``, and the areas are compatible (a missing area is
+    compatible). Each plan is one anchor device plus the MAC already on it. A device is
     attached to at most one plan, and at most :data:`MAX_AUTO_LINK_GROUP`
     devices, so the rest stay suggestions.
     """
@@ -583,7 +636,11 @@ def plan_auto_links(
         return []
     buckets: dict[tuple[str, str], list[Suggestion]] = defaultdict(list)
     for item in suggestions:
-        if item.anchor_device_id and item.mac and _auto_eligible(item, threshold):
+        if (
+            item.anchor_device_id
+            and item.mac
+            and _auto_eligible(item, threshold, similar_names=similar_names)
+        ):
             buckets[(item.anchor_device_id, item.mac)].append(item)
 
     claimed: set[str] = set()
@@ -777,7 +834,9 @@ def _network_macs(connections: Iterable[tuple[str, str]]) -> set[str]:
     return found
 
 
-def _auto_eligible(item: Suggestion, threshold: float) -> bool:
+def _auto_eligible(
+    item: Suggestion, threshold: float, *, similar_names: bool = False
+) -> bool:
     """Return whether this match is strong enough to link on its own.
 
     Hardware matches are included. An exact name is included, but a one-word
@@ -794,9 +853,19 @@ def _auto_eligible(item: Suggestion, threshold: float) -> bool:
         if unassigned and len(fold_name(item.name_a).split()) < 2:
             return False
         return True
-    if unassigned or item.shared_tokens < 2:
+    if item.score < threshold:
         return False
-    return item.score >= threshold
+    if similar_names and item.shared_tokens >= 1:
+        area = item.area_name_a or item.area_name_b
+        if (
+            item.area_name_a
+            and item.area_name_b
+            and item.area_name_a != item.area_name_b
+        ):
+            area = None
+        if names_contained(item.name_a, item.name_b, area):
+            return True
+    return not unassigned and item.shared_tokens >= 2
 
 
 def _bucket_rank(items: Sequence[Suggestion]) -> tuple[int, float, str, str]:

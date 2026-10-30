@@ -28,6 +28,9 @@ CONF_MATCH_NAMES = "match_names"
 # integration. ``origin`` on a config entry is ``manual`` or ``auto``.
 CONF_AUTO_LINK = "auto_link"
 CONF_AUTO_LINK_THRESHOLD = "auto_link_threshold"
+# Also link fuzzy names automatically when one name is the other plus only
+# filler words ("Deck Camera" and "G4 Deck Camera"). Added in 2.0.0.
+CONF_AUTO_LINK_SIMILAR = "auto_link_similar"
 CONF_ORIGIN = "origin"
 ORIGIN_MANUAL = "manual"
 ORIGIN_AUTO = "auto"
@@ -53,6 +56,20 @@ SUGGESTION_DEBOUNCE_SECONDS = 2.0
 # does not fill the page; the sensor and diagnostics still list the rest.
 MAX_DISCOVERY_FLOWS = 10
 MAX_LISTED_SUGGESTIONS = 25
+
+# 2.0.0 keeps every link as a subentry of one Device Linker entry, the hub.
+# The hub's data is ``{"hub": True}``. An old link entry that migration folded
+# into the hub keeps ``{"merged_into": <hub entry id>}`` until it is removed.
+CONF_HUB = "hub"
+CONF_MERGED_INTO = "merged_into"
+HUB_UNIQUE_ID = DOMAIN
+HUB_TITLE = "Device Linker"
+SUBENTRY_LINK = "link"
+CONFIG_VERSION = 3
+# The links the hub last applied, by subentry id, so a link deleted while
+# Device Linker was not running is still undone at the next start.
+LINKS_STORAGE_KEY = "device_linker.links"
+LINKS_STORAGE_VERSION = 1
 
 DATA_MANAGER = "manager"
 SERVICE_RESCAN = "rescan_suggestions"

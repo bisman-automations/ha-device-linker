@@ -1,4 +1,4 @@
-"""Donavan's install: UniFi has the MAC, and often no area.
+"""A reported install: UniFi has the MAC, and often no area.
 
 The other integration (Apple TV, Sonos, Shelly) has the same or a
 near-identical name and no MAC. Name matching used to require both devices
@@ -73,7 +73,7 @@ async def async_setup_anchor(hass) -> MockConfigEntry:
 
     The two anchor devices already share a MAC through this entry, so they
     are not themselves a suggestion. The service device this creates is the
-    one Donavan sees in the Utility Room.
+    one a user sees in the Utility Room.
     """
     areas = ar.async_get(hass)
     utility = areas.async_get_or_create("Utility Room")
@@ -113,7 +113,7 @@ async def async_setup_anchor(hass) -> MockConfigEntry:
 
 
 async def async_unifi_name_case(hass) -> UnifiNameCase:
-    """Build the registry Donavan described, then return every device.
+    """Build the reported registry, then return every device.
 
     Call :func:`async_setup_anchor` first. This does not scan; the test
     decides when the manager runs.

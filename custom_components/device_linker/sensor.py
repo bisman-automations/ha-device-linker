@@ -12,12 +12,8 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .manager import (
-    SuggestionManager,
-    async_get_manager,
-    auto_linked_summaries,
-    entry_is_link,
-)
+from .manager import SuggestionManager, async_get_manager, auto_linked_summaries
+from .registry import is_hub
 
 _DEVICE_INFO = DeviceInfo(
     identifiers={(DOMAIN, "suggestions")},
@@ -33,8 +29,8 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Add the suggestions sensor for the first real config entry."""
-    if not entry_is_link(entry):
+    """Add the suggestions sensor to the hub."""
+    if not is_hub(entry):
         return
     manager = async_get_manager(hass)
     if manager is None:

@@ -8,12 +8,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.device_linker.const import (
-    CONF_AUTO_LINK,
-    CONF_AUTO_LINK_THRESHOLD,
-    CONF_MATCH_HARDWARE,
-    CONF_MATCH_NAMES,
     CONF_ORIGIN,
-    CONF_SUGGESTION_THRESHOLD,
     DOMAIN,
     ISSUE_AUTO_LINKED,
     SERVICE_RESCAN,
@@ -23,36 +18,31 @@ from custom_components.device_linker.const import (
 )
 from custom_components.device_linker.manager import async_get_manager
 from custom_components.device_linker.matching import pair_key
-from custom_components.device_linker.registry import get_entry_settings
+from custom_components.device_linker.registry import hub_entry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.issue_registry import async_get as async_get_issues
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
+from tests.ha.helpers import (
+    get_entry_settings,
+    link_for as _link_for,
+    links,
+    refresh,
+    remove_link,
+)
 from tests.ha.unifi_fixture import async_setup_anchor, async_unifi_name_case
 
 TV_MAC = "aa:bb:cc:dd:ee:10"
 
 
 def _links(hass):
-    """Automatic entries keyed by title."""
-    found = []
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if entry.source == "ignore":
-            continue
-        settings = get_entry_settings(entry)
-        if settings[CONF_ORIGIN] != "auto":
-            continue
-        found.append(entry)
-    return found
+    """Automatic links."""
+    return links(hass, origin="auto")
 
 
 def _entry_for(hass, device_id: str):
-    for entry in _links(hass):
-        settings = get_entry_settings(entry)
-        if device_id in settings["linked_device_ids"]:
-            return entry
-    return None
+    return _link_for(hass, device_id, origin="auto")
 
 
 async def test_unifi_same_name_links_when_the_client_has_no_area(hass) -> None:
@@ -213,8 +203,7 @@ async def test_deleting_an_entry_is_not_linked_again_until_reset(hass) -> None:
     created = _entry_for(hass, apple.id)
     assert created is not None
 
-    await hass.config_entries.async_remove(created.entry_id)
-    await hass.async_block_till_done()
+    await remove_link(hass, created)
     assert (dr.CONNECTION_NETWORK_MAC, TV_MAC) not in registry.async_get(
         apple.id
     ).connections
@@ -233,8 +222,8 @@ async def test_deleting_an_entry_is_not_linked_again_until_reset(hass) -> None:
     ).connections
 
 
-async def test_configure_removes_one_device_and_does_not_add_it_back(hass) -> None:
-    """Removing a device under Configure is an unlink, not a pause."""
+async def test_edit_link_removes_one_device_and_does_not_add_it_back(hass) -> None:
+    """Removing a device with Edit link is an unlink, not a pause."""
     await async_setup_anchor(hass)
     unifi_config = MockConfigEntry(domain="unifi")
     unifi_config.add_to_hass(hass)
@@ -266,20 +255,15 @@ async def test_configure_removes_one_device_and_does_not_add_it_back(hass) -> No
     assert created is not None
     assert set(get_entry_settings(created)["linked_device_ids"]) == {apple.id, sonos.id}
 
-    result = await hass.config_entries.options.async_init(created.entry_id)
-    result = await hass.config_entries.options.async_configure(
+    hub = hub_entry(hass)
+    result = await hub.start_subentry_reconfigure_flow(hass, created.entry_id)
+    assert result["step_id"] == "reconfigure"
+    result = await hass.config_entries.subentries.async_configure(
         result["flow_id"],
-        user_input={
-            "linked_device_ids": [apple.id],
-            "selected_mac_address": TV_MAC,
-            CONF_SUGGESTION_THRESHOLD: 0.8,
-            CONF_AUTO_LINK_THRESHOLD: 0.95,
-            CONF_MATCH_HARDWARE: True,
-            CONF_MATCH_NAMES: True,
-            CONF_AUTO_LINK: True,
-        },
+        user_input={"linked_device_ids": [apple.id], "selected_mac_address": TV_MAC},
     )
-    assert result["type"] == "create_entry"
+    assert result["type"] == "abort"
+    assert result["reason"] == "reconfigure_successful"
     await hass.async_block_till_done()
 
     assert (dr.CONNECTION_NETWORK_MAC, TV_MAC) not in registry.async_get(
@@ -341,16 +325,24 @@ async def test_manual_entry_gains_another_device_without_changing_origin(hass) -
     await manager.async_scan()
     await hass.async_block_till_done()
 
-    updated = hass.config_entries.async_get_entry(manual.entry_id)
+    updated = _link_for(hass, shelly.id)
     settings = get_entry_settings(updated)
     assert settings[CONF_ORIGIN] == "manual"
     assert set(settings["linked_device_ids"]) == {shelly.id, esphome.id}
     assert updated.title == "Link Garage Door to 2 devices"
-    assert updated.version == 2
-    # The original anchor entry was migrated and was not relabeled.
-    original = hass.config_entries.async_get_entry(anchor.entry_id)
-    assert original.version == 2
-    assert get_entry_settings(original)[CONF_ORIGIN] == "manual"
+    # Both old entries were folded into one hub; the second one is gone.
+    hub = hub_entry(hass)
+    assert hub.version == 3
+    assert hub.entry_id == anchor.entry_id
+    assert hass.config_entries.async_get_entry(manual.entry_id) is None
+    entries = [
+        entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.source != "ignore"
+    ]
+    assert entries == [hub]
+    # The original anchor link was migrated and was not relabeled.
+    assert {link.settings[CONF_ORIGIN] for link in links(hass)} == {"manual"}
 
 
 async def test_v1_store_keeps_dismissals_and_turns_auto_link_on(hass) -> None:
@@ -538,7 +530,7 @@ async def test_copied_mac_does_not_anchor_the_next_device(hass) -> None:
     await manager.async_scan()
     await hass.async_block_till_done()
 
-    updated = hass.config_entries.async_get_entry(created.entry_id)
+    updated = refresh(hass, created)
     settings = get_entry_settings(updated)
     assert settings["main_device_id"] == unifi.id
     assert set(settings["linked_device_ids"]) == {apple.id, extra.id}
@@ -550,3 +542,70 @@ async def test_copied_mac_does_not_anchor_the_next_device(hass) -> None:
     assert (dr.CONNECTION_NETWORK_MAC, TV_MAC) in registry.async_get(
         extra.id
     ).connections
+
+
+async def _camera_pair(hass):
+    unifi_config = MockConfigEntry(domain="unifi")
+    unifi_config.add_to_hass(hass)
+    protect_config = MockConfigEntry(domain="unifiprotect")
+    protect_config.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    unifi = registry.async_get_or_create(
+        config_entry_id=unifi_config.entry_id,
+        identifiers={("unifi", "driveway")},
+        connections={(dr.CONNECTION_NETWORK_MAC, "aa:bb:cc:dd:ee:30")},
+        name="Front Driveway",
+    )
+    camera = registry.async_get_or_create(
+        config_entry_id=protect_config.entry_id,
+        identifiers={("unifiprotect", "driveway")},
+        name="Front Driveway Camera",
+    )
+    return unifi, camera
+
+
+async def _set_similar(hass, enabled: bool) -> None:
+    manager = async_get_manager(hass)
+    await manager.async_update_settings(
+        threshold=0.8,
+        match_hardware=True,
+        match_names=True,
+        auto_link=True,
+        auto_link_threshold=0.95,
+        auto_link_similar=enabled,
+        scan=False,
+    )
+
+
+async def test_similar_names_are_linked_when_the_setting_is_on(hass) -> None:
+    """Front Driveway (UniFi) and Front Driveway Camera become one link."""
+    await async_setup_anchor(hass)
+    await _set_similar(hass, True)
+    unifi, camera = await _camera_pair(hass)
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+
+    link = _entry_for(hass, camera.id)
+    assert link is not None
+    settings = get_entry_settings(link)
+    assert settings["main_device_id"] == unifi.id
+    assert settings["linked_device_ids"] == [camera.id]
+    assert (dr.CONNECTION_NETWORK_MAC, "aa:bb:cc:dd:ee:30") in dr.async_get(
+        hass
+    ).async_get(camera.id).connections
+
+
+async def test_similar_names_stay_suggestions_when_the_setting_is_off(hass) -> None:
+    """With the setting off, the same pair is only suggested."""
+    await async_setup_anchor(hass)
+    await _set_similar(hass, False)
+    unifi, camera = await _camera_pair(hass)
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+
+    assert _entry_for(hass, camera.id) is None
+    manager = async_get_manager(hass)
+    assert any(
+        {item.device_id_a, item.device_id_b} == {unifi.id, camera.id}
+        for item in manager.suggestions
+    )

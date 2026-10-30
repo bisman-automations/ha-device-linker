@@ -151,7 +151,8 @@ async def test_unifi_mac_suggests_a_device_in_another_area(hass) -> None:
         flows[0]["flow_id"],
         user_input={"selected_mac_address": MAC},
     )
-    assert result["type"] == "create_entry"
+    assert result["type"] == "abort"
+    assert result["reason"] == "linked"
     await hass.async_block_till_done()
     updated = dr.async_get(hass).async_get(shelly.id)
     assert (dr.CONNECTION_NETWORK_MAC, MAC) in updated.connections
@@ -167,7 +168,8 @@ async def test_unifi_mac_suggests_a_device_in_another_area(hass) -> None:
     )
 
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)
-    assert diagnostics["entry"]["mac_address"] == "**REDACTED**"
+    assert diagnostics["links"]
+    assert all(link["mac_address"] == "**REDACTED**" for link in diagnostics["links"])
     assert "match_hardware" in diagnostics["suggestions"]
 
 
@@ -296,10 +298,8 @@ async def test_rescan_action_and_option_switches(hass) -> None:
     assert any(item.reason == "mac" for item in manager.suggestions)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["step_id"] == "configure"
+    assert result["step_id"] == "init"
     submitted = {
-        "linked_device_ids": entry.data["linked_device_ids"],
-        "selected_mac_address": "11:22:33:44:55:66",
         CONF_SUGGESTION_THRESHOLD: 0.9,
         CONF_MATCH_HARDWARE: False,
         CONF_MATCH_NAMES: True,

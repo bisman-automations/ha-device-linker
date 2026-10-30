@@ -757,3 +757,81 @@ def test_fuzzy_names_without_a_mac_are_not_compared_across_areas() -> None:
         threshold=0.5,
         match_hardware=False,
     )
+
+
+@pytest.mark.parametrize(
+    ("name_a", "name_b", "area"),
+    [
+        ("Front Driveway", "Front Driveway Camera", None),
+        ("Deck", "G4 Deck Camera", None),
+        ("Garage Cam", "Garage Camera", "Garage"),
+        ("Mamaroo", "4moms Mamaroo", None),
+        ("Front Entrance Doorbell", "Front Entrance Doorbell Camera", None),
+    ],
+)
+def test_names_contained_allows_filler_words(name_a, name_b, area) -> None:
+    """A name plus generic words, numbers or model codes is the same device."""
+    assert matching.names_contained(name_a, name_b, area)
+    assert matching.names_contained(name_b, name_a, area)
+
+
+@pytest.mark.parametrize(
+    ("name_a", "name_b", "area"),
+    [
+        ("Living Room TV", "Living Room Apple TV", "Living Room"),
+        ("Garage Door", "Garage Camera", "Garage"),
+        ("Upstairs Hallway", "Upstairs Hallway Thermostat Sensor Kitchen", None),
+    ],
+)
+def test_names_contained_rejects_other_devices(name_a, name_b, area) -> None:
+    """A leftover brand, place or device word can mean a different device."""
+    assert not matching.names_contained(name_a, name_b, area)
+
+
+def _similar_pair(name_a: str, name_b: str):
+    unifi = _device(
+        "unifi",
+        name=name_a,
+        area_id=None,
+        area_name=None,
+        integration="unifi",
+        connections=(("mac", "aa:bb:cc:dd:ee:20"),),
+    )
+    camera = _device(
+        "camera",
+        name=name_b,
+        area_id=None,
+        area_name=None,
+        integration="unifiprotect",
+    )
+    return matching.suggest(
+        [unifi, camera],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.5,
+        match_hardware=False,
+    )
+
+
+def test_similar_names_link_only_when_the_setting_is_on() -> None:
+    """Front Driveway and Front Driveway Camera link with the setting on."""
+    suggestions = _similar_pair("Front Driveway", "Front Driveway Camera")
+    assert suggestions
+    assert matching.plan_auto_links(suggestions, enabled=True, threshold=0.5) == []
+    plans = matching.plan_auto_links(
+        suggestions, enabled=True, threshold=0.5, similar_names=True
+    )
+    assert len(plans) == 1
+    assert plans[0].anchor_device_id == "unifi"
+    assert plans[0].linked_device_ids == ("camera",)
+
+
+def test_similar_names_never_link_a_different_device() -> None:
+    """Garage Door is not linked to Garage Camera, even with the setting on."""
+    suggestions = _similar_pair("Garage Door", "Garage Camera")
+    assert (
+        matching.plan_auto_links(
+            suggestions, enabled=True, threshold=0.5, similar_names=True
+        )
+        == []
+    )

@@ -21,12 +21,7 @@ import logging
 from types import MappingProxyType
 from typing import Any
 
-from homeassistant.config_entries import (
-    SOURCE_DISCOVERY,
-    SOURCE_IGNORE,
-    SOURCE_USER,
-    ConfigEntry,
-)
+from homeassistant.config_entries import SOURCE_DISCOVERY, ConfigEntry, ConfigSubentry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.data_entry_flow import AbortFlow
@@ -42,6 +37,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_ADDED_CONNECTIONS,
     CONF_AUTO_LINK,
+    CONF_AUTO_LINK_SIMILAR,
     CONF_AUTO_LINK_THRESHOLD,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
@@ -63,6 +59,7 @@ from .const import (
     SERVICE_RESET,
     STORAGE_KEY,
     STORAGE_VERSION,
+    SUBENTRY_LINK,
     SUGGESTION_DEBOUNCE_SECONDS,
     SUGGESTION_THRESHOLD_MAX,
     SUGGESTION_THRESHOLD_MIN,
@@ -78,7 +75,7 @@ from .matching import (
     suggest,
     suggestion_unique_id,
 )
-from .registry import get_device, get_entry_settings, link_title, link_unique_id
+from .registry import get_device, hub_entry, iter_links, link_title, link_unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -98,6 +95,7 @@ class SuggestionSettings:
     match_names: bool = True
     auto_link: bool = True
     auto_link_threshold: float = DEFAULT_AUTO_LINK_THRESHOLD
+    auto_link_similar: bool = True
     dismissed: frozenset[str] = frozenset()
     unlinked: frozenset[str] = frozenset()
     announced: frozenset[str] = frozenset()
@@ -132,7 +130,6 @@ class SuggestionManager:
         self._unsub_debounce: Any = None
         self._sensor: Any = None
         self._sensor_entry_id: str | None = None
-        self._platform_adders: dict[str, Any] = {}
 
     @property
     def settings(self) -> SuggestionSettings:
@@ -188,7 +185,6 @@ class SuggestionManager:
                 self.hass.services.async_remove(DOMAIN, service)
         self._sensor = None
         self._sensor_entry_id = None
-        self._platform_adders.clear()
 
     async def async_scan(self) -> list[Suggestion]:
         """Rebuild suggestions, link strong matches, and reconcile discoveries.
@@ -225,6 +221,7 @@ class SuggestionManager:
             matches,
             enabled=self._settings.auto_link,
             threshold=self._settings.auto_link_threshold,
+            similar_names=self._settings.auto_link_similar,
         )
         linked_keys = await self._async_apply_plans(plans)
         self._suggestions = [item for item in matches if item.key not in linked_keys]
@@ -252,6 +249,7 @@ class SuggestionManager:
         match_names: bool,
         auto_link: bool,
         auto_link_threshold: float,
+        auto_link_similar: bool | None = None,
         scan: bool = True,
     ) -> None:
         """Store new preferences and, by default, scan again."""
@@ -262,6 +260,11 @@ class SuggestionManager:
             match_names=match_names,
             auto_link=bool(auto_link),
             auto_link_threshold=_clamp_threshold(auto_link_threshold),
+            auto_link_similar=(
+                self._settings.auto_link_similar
+                if auto_link_similar is None
+                else bool(auto_link_similar)
+            ),
         )
         await _save_settings(self._store, self._settings)
         if scan:
@@ -299,30 +302,13 @@ class SuggestionManager:
         return unique_id in self._settings.dismissed
 
     def async_add_sensor(self, entry_id: str, async_add_entities: Any) -> None:
-        """Create the suggestions sensor once, on the first real entry."""
-        self._platform_adders[entry_id] = async_add_entities
+        """Create the suggestions sensor on the hub entry."""
         if self._sensor is not None:
             return
         from .sensor import SuggestionSensor
 
         self._sensor = SuggestionSensor(self)
         self._sensor_entry_id = entry_id
-        async_add_entities([self._sensor])
-
-    def async_release_sensor(self, entry_id: str) -> None:
-        """Forget the sensor when its config entry unloads, then adopt another."""
-        self._platform_adders.pop(entry_id, None)
-        if self._sensor_entry_id != entry_id:
-            return
-        self._sensor = None
-        self._sensor_entry_id = None
-        if not self._platform_adders:
-            return
-        next_entry_id, async_add_entities = next(iter(self._platform_adders.items()))
-        from .sensor import SuggestionSensor
-
-        self._sensor = SuggestionSensor(self)
-        self._sensor_entry_id = next_entry_id
         async_add_entities([self._sensor])
 
     @property
@@ -450,21 +436,26 @@ class SuggestionManager:
     async def _async_apply_plan(
         self, plan: AutoLinkPlan
     ) -> tuple[set[str], str | None]:
-        """Link ``plan`` onto the anchor's entry. Return new pair keys and a notice."""
+        """Link ``plan`` onto the anchor's link. Return new pair keys and a notice.
+
+        The link is a subentry of the hub. The hub's update listener puts the
+        MAC on the devices, the same way it does for a link added by hand.
+        """
+        hub = hub_entry(self.hass)
+        if hub is None:
+            return set(), None
         registry = dr.async_get(self.hass)
         anchor = get_device(registry, plan.anchor_device_id)
         if anchor is None:
             return set(), None
         unique_id = link_unique_id(plan.anchor_device_id, plan.mac)
-        existing = _find_link_entry(
-            self.hass, unique_id, plan.anchor_device_id, plan.mac
-        )
+        existing = find_link(self.hass, unique_id, plan.anchor_device_id, plan.mac)
         connection = (dr.CONNECTION_NETWORK_MAC, plan.mac)
         already: set[str] = set()
         old_added: dict[str, bool] = {}
         origin = ORIGIN_AUTO
         if existing is not None:
-            current = get_entry_settings(existing)
+            current = existing[1]
             already = {
                 device_id
                 for device_id in current[CONF_LINKED_DEVICE_IDS]
@@ -479,7 +470,7 @@ class SuggestionManager:
                 if current[CONF_ORIGIN] == ORIGIN_MANUAL
                 else ORIGIN_AUTO
             )
-        # Keep devices the entry already links. A plan only lists new matches,
+        # Keep devices the link already has. A plan only lists new matches,
         # and replacing the list would drop the ones a person already chose.
         chosen: list[str] = [device_id for device_id in already]
         chosen_names: list[str] = []
@@ -488,6 +479,7 @@ class SuggestionManager:
             device = get_device(registry, device_id)
             if device is not None and device.config_entry_id:
                 used_entries.add(device.config_entry_id)
+        skip_id = existing[0].subentry_id if existing is not None else None
         for device_id, device_name in zip(
             plan.linked_device_ids, plan.linked_names, strict=True
         ):
@@ -496,9 +488,7 @@ class SuggestionManager:
             device = get_device(registry, device_id)
             if device is None or device.config_entry_id in used_entries:
                 continue
-            if _linked_on_another_entry(
-                self.hass, device_id, existing.entry_id if existing else None
-            ):
+            if linked_on_another_link(self.hass, device_id, skip_id):
                 continue
             if _mac_conflicts(registry, device, connection, already | set(chosen)):
                 _LOGGER.info(
@@ -510,45 +500,27 @@ class SuggestionManager:
                 continue
             used_entries.add(device.config_entry_id)
             chosen.append(device_id)
-            if device_id not in already:
-                chosen_names.append(device_name)
+            chosen_names.append(device_name)
         fresh = [device_id for device_id in chosen if device_id not in already]
-        if not fresh and existing is not None:
-            return set(), None
-        if not chosen:
-            return set(), None
-        added = dict(old_added)
-        for device_id in chosen:
-            device = get_device(registry, device_id)
-            if device is None:
-                continue
-            if device_id in already and device_id in added:
-                continue
-            added[device_id] = connection not in device.connections
-        payload = _link_payload(plan.anchor_device_id, chosen, plan.mac, added, origin)
-        anchor_name = anchor.name_by_user or anchor.name or plan.anchor_name
-        title = link_title(anchor_name, len(chosen))
-        if existing is None:
-            entry = ConfigEntry(
-                data=payload,
-                discovery_keys=MappingProxyType({}),
-                domain=DOMAIN,
-                minor_version=1,
-                options=None,
-                source=SOURCE_USER,
-                subentries_data=None,
-                title=title,
-                unique_id=unique_id,
-                version=2,
-            )
-            await self.hass.config_entries.async_add(entry)
-        else:
-            _update_link_entry(self.hass, existing, payload, title, unique_id)
-            _apply_owned_connections(registry, chosen, added, connection)
-        keys = {pair_key(plan.anchor_device_id, device_id) for device_id in fresh}
-        keys |= pairs_among(None, fresh)
         if not fresh:
             return set(), None
+        added = dict(old_added)
+        for device_id in fresh:
+            device = get_device(registry, device_id)
+            if device is not None:
+                added[device_id] = connection not in device.connections
+        payload = link_payload(plan.anchor_device_id, chosen, plan.mac, added, origin)
+        anchor_name = anchor.name_by_user or anchor.name or plan.anchor_name
+        save_link(
+            self.hass,
+            hub,
+            existing[0] if existing is not None else None,
+            payload,
+            link_title(anchor_name, len(chosen)),
+            unique_id,
+        )
+        keys = {pair_key(plan.anchor_device_id, device_id) for device_id in fresh}
+        keys |= pairs_among(None, fresh)
         notice = f"{anchor_name} ({plan.anchor_integration}): {', '.join(chosen_names)}"
         _LOGGER.info(
             "Automatically linked %s to %s device(s): %s",
@@ -576,47 +548,65 @@ def _discovery_data(unique_id: str, item: Suggestion) -> dict[str, Any]:
     }
 
 
-def _find_link_entry(
-    hass: HomeAssistant, unique_id: str, main_id: str, mac: str
-) -> ConfigEntry | None:
-    """Return the entry for this anchor and MAC, including ones saved before unique ids."""
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if not entry_is_link(entry):
-            continue
-        if entry.unique_id == unique_id:
-            return entry
-        try:
-            settings = get_entry_settings(entry)
-        except KeyError:
-            continue
+def find_link(
+    hass: HomeAssistant, unique_id: str, main_id: str | None, mac: str
+) -> tuple[ConfigSubentry, dict[str, object]] | None:
+    """The link for this anchor and MAC, including ones saved before unique ids."""
+    for _hub, subentry, settings in iter_links(hass):
+        if subentry.unique_id == unique_id:
+            return subentry, settings
+    for _hub, subentry, settings in iter_links(hass):
         if (
             settings[CONF_MAIN_DEVICE_ID] == main_id
             and settings[CONF_MAC_ADDRESS] == mac
         ):
-            return entry
+            return subentry, settings
     return None
 
 
-def _linked_on_another_entry(
-    hass: HomeAssistant, device_id: str, skip_entry_id: str | None
+def linked_on_another_link(
+    hass: HomeAssistant, device_id: str, skip_subentry_id: str | None
 ) -> bool:
-    """Return whether some other Device Linker entry already includes this device.
+    """Return whether another link already includes this device.
 
-    Extending the entry that already has the anchor is handled by the caller.
-    Putting the device on a second entry would give it a second MAC.
+    Extending the link that already has the anchor is handled by the caller.
+    Putting the device on a second link would give it a second MAC.
     """
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if not entry_is_link(entry) or entry.entry_id == skip_entry_id:
+    for _hub, subentry, settings in iter_links(hass):
+        if subentry.subentry_id == skip_subentry_id:
             continue
-        try:
-            settings = get_entry_settings(entry)
-        except KeyError:
-            continue
-        main = settings[CONF_MAIN_DEVICE_ID]
-        linked = settings[CONF_LINKED_DEVICE_IDS]
-        if device_id == main or device_id in linked:
+        if (
+            device_id == settings[CONF_MAIN_DEVICE_ID]
+            or device_id in settings[CONF_LINKED_DEVICE_IDS]
+        ):
             return True
     return False
+
+
+@callback
+def save_link(
+    hass: HomeAssistant,
+    hub: ConfigEntry,
+    subentry: ConfigSubentry | None,
+    payload: dict[str, Any],
+    title: str,
+    unique_id: str,
+) -> None:
+    """Add a link to the hub, or update the one it extends."""
+    if subentry is None:
+        hass.config_entries.async_add_subentry(
+            hub,
+            ConfigSubentry(
+                data=MappingProxyType(payload),
+                subentry_type=SUBENTRY_LINK,
+                title=title,
+                unique_id=unique_id,
+            ),
+        )
+        return
+    hass.config_entries.async_update_subentry(
+        hub, subentry, data=payload, title=title, unique_id=unique_id
+    )
 
 
 def _mac_conflicts(registry, device, connection, allowed_ids: set[str]) -> bool:
@@ -631,7 +621,7 @@ def _mac_conflicts(registry, device, connection, allowed_ids: set[str]) -> bool:
     return False
 
 
-def _link_payload(
+def link_payload(
     main_id: str | None,
     linked_ids: list[str],
     mac: str,
@@ -647,51 +637,6 @@ def _link_payload(
         },
         CONF_ORIGIN: origin,
     }
-
-
-def _update_link_entry(
-    hass: HomeAssistant,
-    entry: ConfigEntry,
-    payload: dict[str, Any],
-    title: str,
-    unique_id: str,
-) -> None:
-    """Write link data where get_entry_settings will read it.
-
-    Configure stores the link in options, which override data. Update both
-    when options are already present so an automatic addition is not hidden
-    by the previous options.
-    """
-    updated_options = {**entry.options, **payload} if entry.options else None
-    hass.config_entries.async_update_entry(
-        entry,
-        data={**entry.data, **payload},
-        options=updated_options if updated_options is not None else entry.options,
-        title=title,
-        unique_id=unique_id,
-    )
-
-
-def _apply_owned_connections(registry, device_ids, added, connection) -> None:
-    """Add the shared MAC to devices this entry owns. Setup does this for new entries."""
-    for device_id in device_ids:
-        if not added.get(device_id, False):
-            continue
-        device = get_device(registry, device_id)
-        if device is None or connection in device.connections:
-            continue
-        try:
-            registry.async_update_device(
-                device.id,
-                new_connections=device.connections | {connection},
-            )
-        except dr.DeviceConnectionCollisionError:
-            _LOGGER.warning(
-                "Could not add %s to device %s because another device from that "
-                "integration already has it",
-                connection[1],
-                device_id,
-            )
 
 
 def _publish_auto_link_issue(hass: HomeAssistant, notices: list[str]) -> None:
@@ -724,16 +669,10 @@ def _publish_auto_link_issue(hass: HomeAssistant, notices: list[str]) -> None:
 
 
 def auto_linked_summaries(hass: HomeAssistant) -> list[dict[str, object]]:
-    """Automatic entries for the sensor and diagnostics. MAC addresses are omitted."""
+    """Automatic links for the sensor and diagnostics. MAC addresses are omitted."""
     registry = dr.async_get(hass)
     items: list[dict[str, object]] = []
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if not entry_is_link(entry):
-            continue
-        try:
-            settings = get_entry_settings(entry)
-        except KeyError:
-            continue
+    for _hub, subentry, settings in iter_links(hass):
         if settings[CONF_ORIGIN] != ORIGIN_AUTO:
             continue
         main_id = settings[CONF_MAIN_DEVICE_ID]
@@ -751,11 +690,7 @@ def auto_linked_summaries(hass: HomeAssistant) -> list[dict[str, object]]:
             if device is not None:
                 linked_names.append(device.name_by_user or device.name or device_id)
         items.append(
-            {
-                "title": entry.title,
-                "main": main_name,
-                "linked": linked_names,
-            }
+            {"title": subentry.title, "main": main_name, "linked": linked_names}
         )
         if len(items) >= MAX_LISTED_SUGGESTIONS:
             break
@@ -816,13 +751,7 @@ def _copied_macs(hass: HomeAssistant) -> set[tuple[str, str]]:
     become the anchor of the next match.
     """
     copied: set[tuple[str, str]] = set()
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if not entry_is_link(entry):
-            continue
-        try:
-            settings = get_entry_settings(entry)
-        except KeyError:
-            continue
+    for _hub, _subentry, settings in iter_links(hass):
         mac = settings[CONF_MAC_ADDRESS]
         added = settings[CONF_ADDED_CONNECTIONS]
         if not isinstance(mac, str) or not isinstance(added, dict):
@@ -834,28 +763,16 @@ def _copied_macs(hass: HomeAssistant) -> set[tuple[str, str]]:
 
 
 def _linked_pairs(hass: HomeAssistant) -> set[str]:
-    """Pairs already covered by a Device Linker entry."""
+    """Pairs already covered by a link."""
     pairs: set[str] = set()
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        if entry.source == SOURCE_IGNORE:
-            continue
-        try:
-            settings = get_entry_settings(entry)
-        except KeyError:
-            continue
+    for _hub, _subentry, settings in iter_links(hass):
+        main = settings[CONF_MAIN_DEVICE_ID]
         linked = [
             device_id
             for device_id in settings[CONF_LINKED_DEVICE_IDS]
             if isinstance(device_id, str)
         ]
-        main = settings[CONF_MAIN_DEVICE_ID]
-        ids = list(linked)
-        if isinstance(main, str):
-            for device_id in linked:
-                pairs.add(pair_key(main, device_id))
-        for index, left in enumerate(ids):
-            for right in ids[index + 1 :]:
-                pairs.add(pair_key(left, right))
+        pairs |= pairs_among(main if isinstance(main, str) else None, linked)
     return pairs
 
 
@@ -876,7 +793,7 @@ def plan_entry_data(
         not in (connections_a if device_id == device_a_id else connections_b)
         for device_id in linked_ids
     }
-    return _link_payload(main_id, linked_ids, mac, added, ORIGIN_MANUAL)
+    return link_payload(main_id, linked_ids, mac, added, ORIGIN_MANUAL)
 
 
 async def async_load_settings(hass: HomeAssistant) -> SuggestionSettings:
@@ -904,6 +821,9 @@ async def async_apply_suggestion_preferences(
     auto_link_threshold = _clamp_threshold(
         user_input.get(CONF_AUTO_LINK_THRESHOLD, current.auto_link_threshold)
     )
+    auto_link_similar = bool(
+        user_input.get(CONF_AUTO_LINK_SIMILAR, current.auto_link_similar)
+    )
     if manager is not None:
         await manager.async_update_settings(
             threshold=threshold,
@@ -911,6 +831,7 @@ async def async_apply_suggestion_preferences(
             match_names=match_names,
             auto_link=auto_link,
             auto_link_threshold=auto_link_threshold,
+            auto_link_similar=auto_link_similar,
             scan=scan,
         )
         return
@@ -924,6 +845,7 @@ async def async_apply_suggestion_preferences(
             match_names=match_names,
             auto_link=auto_link,
             auto_link_threshold=auto_link_threshold,
+            auto_link_similar=auto_link_similar,
         ),
     )
 
@@ -984,6 +906,7 @@ async def _load_settings(store: Store[dict[str, Any]]) -> SuggestionSettings:
         auto_link_threshold=_clamp_threshold(
             stored.get("auto_link_threshold", DEFAULT_AUTO_LINK_THRESHOLD)
         ),
+        auto_link_similar=bool(stored.get("auto_link_similar", True)),
         dismissed=_string_set(stored, "dismissed"),
         unlinked=_string_set(stored, "unlinked"),
         announced=_string_set(stored, "announced"),
@@ -1000,13 +923,9 @@ async def _save_settings(
             "match_names": settings.match_names,
             "auto_link": settings.auto_link,
             "auto_link_threshold": settings.auto_link_threshold,
+            "auto_link_similar": settings.auto_link_similar,
             "dismissed": sorted(settings.dismissed),
             "unlinked": sorted(settings.unlinked),
             "announced": sorted(settings.announced),
         }
     )
-
-
-def entry_is_link(entry: ConfigEntry) -> bool:
-    """Return False for ignored discoveries, which store no link."""
-    return entry.source != SOURCE_IGNORE
