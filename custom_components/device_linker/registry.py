@@ -1,6 +1,6 @@
 """Device registry access, link settings, and finding the hub's links."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 import re
 from typing import Any
 
@@ -31,6 +31,22 @@ from .const import (
     ORIGIN_MANUAL,
     SUBENTRY_LINK,
 )
+
+
+def text_pairs(items: Iterable[Any]) -> tuple[tuple[str, str], ...]:
+    """Identifiers or connections as ``(str, str)`` pairs.
+
+    Home Assistant stores whatever an integration registers, and some use a
+    number as the value or a tuple with more than two parts. Those are turned
+    into text (the extra parts joined with ``:``) so matching can compare them;
+    anything shorter than a pair is skipped.
+    """
+    pairs: list[tuple[str, str]] = []
+    for item in items:
+        if not isinstance(item, tuple) or len(item) < 2:
+            continue
+        pairs.append((str(item[0]), ":".join(str(part) for part in item[1:])))
+    return tuple(pairs)
 
 
 def get_device(registry: DeviceRegistry, device_id: str) -> DeviceEntry | None:

@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-10-30
+
+### Fixed
+
+- **Turning on MAC matching no longer fails with "Unknown error".** Some integrations register a device with a number, or more than two parts, as its identifier. Device Linker crashed when it compared those, so saving **Matching settings** failed and suggestions stopped updating. Those identifiers are now handled, and saving the settings always succeeds; a problem during the rescan that follows is written to the log instead.
+
 ## [2.5.0] - 2026-10-30
 
 ### Added
@@ -149,6 +155,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.5.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.3.0...v2.4.0

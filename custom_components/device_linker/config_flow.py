@@ -73,6 +73,7 @@ from .registry import (
     link_title,
     link_unique_id,
     normalize_link_value,
+    text_pairs,
 )
 
 MANUAL_ENTRY = "__manual_entry__"
@@ -101,7 +102,7 @@ def _device_label(device: dr.DeviceEntry, integration: str, include_mac: bool) -
         return label
     macs = sorted(
         dr.format_mac(value)
-        for connection_type, value in device.connections
+        for connection_type, value in text_pairs(device.connections)
         if connection_type == dr.CONNECTION_NETWORK_MAC
     )
     return f"{label} — {', '.join(macs) if macs else 'no registered MAC'}"
@@ -202,7 +203,7 @@ def _network_macs(*devices) -> list[str]:
             dr.format_mac(value)
             for device in devices
             if device is not None
-            for connection_type, value in device.connections
+            for connection_type, value in text_pairs(device.connections)
             if connection_type == dr.CONNECTION_NETWORK_MAC
         }
     )

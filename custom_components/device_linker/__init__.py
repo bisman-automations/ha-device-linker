@@ -54,6 +54,7 @@ from .registry import (
     link_settings,
     link_title,
     link_unique_id,
+    text_pairs,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -372,7 +373,7 @@ def _remove_link_devices(registry: dr.DeviceRegistry, entry: ConfigEntry) -> Non
     for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
         if any(
             domain == DOMAIN and value.startswith(LINK_DEVICE_PREFIX)
-            for domain, value in device.identifiers
+            for domain, value in text_pairs(device.identifiers)
         ):
             registry.async_remove_device(device.id)
 

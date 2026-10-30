@@ -25,7 +25,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_LINKED_DEVICE_IDS, CONF_MAC_ADDRESS, CONF_MAIN_DEVICE_ID, DOMAIN
-from .registry import hub_links, link_item
+from .registry import hub_links, link_item, text_pairs
 
 # Separates the device id and the value in a form option's value.
 SEPARATOR = "|"
@@ -94,13 +94,13 @@ def find_leftovers(
     for device in devices:
         values = [
             value
-            for domain, value in device.identifiers
+            for domain, value in text_pairs(device.identifiers)
             if domain == DOMAIN and (device.id, value) not in used
         ]
         if device.id in unlinked_devices:
             values += [
                 dr.format_mac(value)
-                for kind, value in device.connections
+                for kind, value in text_pairs(device.connections)
                 if kind == dr.CONNECTION_NETWORK_MAC
                 and (device.id, dr.format_mac(value)) not in used
             ]

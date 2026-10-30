@@ -835,3 +835,9 @@ def test_similar_names_never_link_a_different_device() -> None:
         )
         == []
     )
+
+
+def test_identifiers_that_are_not_text_are_ignored() -> None:
+    """Some integrations register a number as an identifier value."""
+    assert matching.normalize_mac(12345) is None
+    assert matching.hardware_keys((), (("numbers", 12345),)) == {}

@@ -253,6 +253,8 @@ def normalize_mac(value: str) -> str | None:
     ``format_mac`` returns unrecognized input unchanged; this helper returns
     ``None`` so a serial number is not stored as a MAC key.
     """
+    if not isinstance(value, str):
+        return None
     text = value.strip()
     if len(text) == 17 and text.count(":") == 5:
         formatted = text.lower()
@@ -910,6 +912,8 @@ def _colon_join(bare_hex: str) -> str:
 
 
 def _add_hardware_value(found: dict[tuple[str, str], str | None], value: str) -> None:
+    if not isinstance(value, str):
+        return
     mac = normalize_mac(value)
     if mac is not None:
         found[("mac", mac)] = mac

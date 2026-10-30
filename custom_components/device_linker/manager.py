@@ -83,6 +83,7 @@ from .registry import (
     iter_links,
     link_title,
     link_unique_id,
+    text_pairs,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -286,7 +287,12 @@ class SuggestionManager:
         )
         await _save_settings(self._store, self._settings)
         if scan:
-            await self.async_scan()
+            try:
+                await self.async_scan()
+            except Exception:
+                # The settings are saved either way; a scan problem is logged,
+                # not shown as an error on the settings form.
+                _LOGGER.exception("Scan after saving the settings failed")
 
     async def async_remember_unlinked(self, pairs: set[str]) -> None:
         """Remember pairs the user separated so a later scan leaves them alone."""
@@ -761,8 +767,8 @@ def _device_views(
                 area_name=area.name if area else None,
                 config_entry_id=device.config_entry_id,
                 integration=config_entry.domain,
-                connections=tuple(device.connections),
-                identifiers=tuple(device.identifiers),
+                connections=text_pairs(device.connections),
+                identifiers=text_pairs(device.identifiers),
             )
         )
     return views
