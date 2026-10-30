@@ -118,11 +118,16 @@
         },
         "reconfigure": {
           "title": "Edit link",
-          "description": "The main device, {main_name}, stays the same. Change the devices that share its MAC address, or the MAC address. A device you remove is not linked again automatically until you run Reset dismissed and unlinked. To unlink every device, delete this link instead.",
+          "description": "Every device in this link is listed, including {main_name}, the device the MAC address came from. Each address is shown with the device it came from. Choose the address to share: the device that has it becomes the main device, and the others get it. A device you remove is not linked again automatically until you run Reset dismissed and unlinked. To unlink every device, delete this link instead.",
           "data": {
-            "linked_device_ids": "Devices to link",
-            "selected_mac_address": "MAC address on the main device",
+            "linked_device_ids": "Devices in this link",
+            "selected_mac_address": "MAC address to share",
             "mac_address": "Manual MAC address"
+          },
+          "data_description": {
+            "linked_device_ids": "The device the MAC address came from is included. Add or remove devices here.",
+            "selected_mac_address": "Addresses the devices in this link registered themselves, with the device each came from.",
+            "mac_address": "Type an address to use one that isn't listed."
           }
         }
       },

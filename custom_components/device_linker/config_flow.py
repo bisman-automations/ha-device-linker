@@ -577,80 +577,138 @@ class LinkSubentryFlow(ConfigSubentryFlow):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Change the linked devices or the MAC. The main device stays."""
+        """Change the devices in a link, or the MAC address they share.
+
+        The form lists every device in the link, the main device included, and
+        offers the MAC addresses those devices registered themselves, each
+        named after its device. The main device is the one that has the chosen
+        address; a typed address that none of them has makes a manual link.
+        """
         entry = self._get_entry()
         subentry = self._get_reconfigure_subentry()
         old = link_settings(subentry.data)
         registry = dr.async_get(self.hass)
-        main_id = (
+        old_main_id = (
             old[CONF_MAIN_DEVICE_ID]
             if isinstance(old[CONF_MAIN_DEVICE_ID], str)
             else None
         )
-        main = get_device(registry, main_id) if main_id else None
         old_ids = [d for d in old[CONF_LINKED_DEVICE_IDS] if isinstance(d, str)]
         old_mac = str(old[CONF_MAC_ADDRESS])
         old_added = dict(old[CONF_ADDED_CONNECTIONS])
-        options = _device_options(
-            self.hass,
-            exclude_device_id=main_id,
-            exclude_config_entry_id=main.config_entry_id if main else None,
-        )
+        copied = {d for d in old_ids if old_added.get(d)}
+        options = _device_options(self.hass)
         available = {option["value"] for option in options}
+
+        def own_macs(device: dr.DeviceEntry) -> list[str]:
+            """MAC addresses a device registered itself (not ones this link copied)."""
+            return [
+                mac
+                for mac in _network_macs(device)
+                if not (device.id in copied and mac == old_mac)
+            ]
 
         errors: dict[str, str] = {}
         conflicts: list[str] = []
         if user_input is not None:
-            linked_ids = list(dict.fromkeys(user_input.get(CONF_LINKED_DEVICE_IDS, [])))
+            selected = list(dict.fromkeys(user_input.get(CONF_LINKED_DEVICE_IDS, [])))
+            devices = [get_device(registry, d) for d in selected]
             mac = _submitted_mac(user_input)
-            error = _check_devices(registry, main, linked_ids)
-            if error:
-                errors["base"] = error
+            if any(device is None for device in devices):
+                errors["base"] = "device_not_found"
             elif not mac or not MAC_PATTERN.fullmatch(mac):
                 errors["base"] = "invalid_mac"
             else:
                 mac = dr.format_mac(mac)
-                connection = (dr.CONNECTION_NETWORK_MAC, mac)
-                devices = [get_device(registry, d) for d in linked_ids]
-                owned_here = (
-                    {d for d in old_ids if old_added.get(d)}
-                    if mac == old_mac
-                    else set()
+                owners = [
+                    device.id
+                    for device in devices
+                    if device is not None and mac in own_macs(device)
+                ]
+                main_id = (
+                    old_main_id
+                    if old_main_id in owners
+                    else (owners[0] if owners else None)
                 )
-                conflicts = _connection_conflicts(
-                    self.hass, devices, connection, allowed_ids=owned_here
-                )
-                if conflicts:
-                    errors["base"] = "connection_conflict"
+                main = get_device(registry, main_id) if main_id else None
+                linked_ids = [d for d in selected if d != main_id]
+                error = _check_devices(registry, main, linked_ids)
+                unique_id = link_unique_id(main_id, mac)
+                if error:
+                    errors["base"] = error
+                elif any(
+                    sub.unique_id == unique_id
+                    and sub.subentry_id != subentry.subentry_id
+                    for sub in entry.subentries.values()
+                ):
+                    return self.async_abort(reason="already_configured")
                 else:
-                    added = {}
-                    for device in devices:
-                        if device is None:
-                            continue
-                        if device.id in old_ids and mac == old_mac:
-                            added[device.id] = bool(old_added.get(device.id, False))
-                        else:
-                            added[device.id] = connection not in device.connections
-                    return self.async_update_and_abort(
-                        entry,
-                        subentry,
-                        title=link_title(
-                            _display_name(main) if main else "Manual MAC",
-                            len(linked_ids),
-                        ),
-                        unique_id=link_unique_id(main_id, mac),
-                        data=link_payload(
-                            main_id, linked_ids, mac, added, str(old[CONF_ORIGIN])
-                        ),
+                    connection = (dr.CONNECTION_NETWORK_MAC, mac)
+                    linked = [get_device(registry, d) for d in linked_ids]
+                    conflicts = _connection_conflicts(
+                        self.hass,
+                        linked,
+                        connection,
+                        allowed_ids=copied if mac == old_mac else set(),
                     )
+                    if conflicts:
+                        errors["base"] = "connection_conflict"
+                    else:
+                        added = {}
+                        for device in linked:
+                            if device is None:
+                                continue
+                            if device.id in old_ids and mac == old_mac:
+                                added[device.id] = bool(old_added.get(device.id, False))
+                            else:
+                                added[device.id] = connection not in device.connections
+                        return self.async_update_and_abort(
+                            entry,
+                            subentry,
+                            title=link_title(
+                                _display_name(main) if main else "Manual MAC",
+                                len(linked_ids),
+                            ),
+                            unique_id=unique_id,
+                            data=link_payload(
+                                main_id, linked_ids, mac, added, str(old[CONF_ORIGIN])
+                            ),
+                        )
 
-        current_ids = [d for d in old_ids if d in available]
+        current_ids = [
+            d
+            for d in ([old_main_id] if old_main_id else []) + old_ids
+            if d in available
+        ]
+        sources: dict[str, list[str]] = {}
+        for device_id in current_ids:
+            device = get_device(registry, device_id)
+            if device is None:
+                continue
+            for mac in own_macs(device):
+                sources.setdefault(mac, []).append(_display_name(device))
+        if old_mac not in sources:
+            sources[old_mac] = ["entered by hand"]
         schema: dict[vol.Marker, object] = {
             vol.Required(CONF_LINKED_DEVICE_IDS, default=current_ids): (
                 _devices_selector(options)
             ),
-            **_mac_schema(_network_macs(main), current=old_mac),
+            vol.Optional(CONF_SELECTED_MAC_ADDRESS, default=old_mac): (
+                selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            selector.SelectOptionDict(
+                                value=mac, label=f"{mac} — {', '.join(names)}"
+                            )
+                            for mac, names in sorted(sources.items())
+                        ],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            ),
+            vol.Optional(CONF_MAC_ADDRESS): str,
         }
+        main = get_device(registry, old_main_id) if old_main_id else None
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=vol.Schema(schema),

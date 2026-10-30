@@ -67,7 +67,7 @@ The confirmation screen lists the selected device names. If the address is alrea
 
 Open **Device Linker** under **Settings > Devices & services**. Each link has its own menu.
 
-- **Edit link** (the pencil) changes the MAC address or the linked devices. The main device stays as it is. Removing a device from the selection unlinks it. Clearing the selection unlinks all of them.
+- **Edit link** (the gear) lists every device in the link, including the main device the MAC address came from. The MAC address list shows each address next to the device it came from. Pick a different address and the device that has it becomes the main device; the others get that address instead. Removing a device from the list unlinks it. Removing the main device too, or typing an address none of them has, turns the link into a manual one.
 - **Delete** unlinks every device on that link.
 
 Device Linker removes a MAC connection only when it was the integration that added it, so an address another integration registered is left alone. Deleting the whole Device Linker entry unlinks every link.

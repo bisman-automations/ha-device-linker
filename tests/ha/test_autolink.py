@@ -232,7 +232,7 @@ async def test_edit_link_removes_one_device_and_does_not_add_it_back(hass) -> No
     sonos_config = MockConfigEntry(domain="sonos")
     sonos_config.add_to_hass(hass)
     registry = dr.async_get(hass)
-    registry.async_get_or_create(
+    unifi = registry.async_get_or_create(
         config_entry_id=unifi_config.entry_id,
         identifiers={("unifi", "tv")},
         connections={(dr.CONNECTION_NETWORK_MAC, TV_MAC)},
@@ -260,7 +260,10 @@ async def test_edit_link_removes_one_device_and_does_not_add_it_back(hass) -> No
     assert result["step_id"] == "reconfigure"
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"],
-        user_input={"linked_device_ids": [apple.id], "selected_mac_address": TV_MAC},
+        user_input={
+            "linked_device_ids": [unifi.id, apple.id],
+            "selected_mac_address": TV_MAC,
+        },
     )
     assert result["type"] == "abort"
     assert result["reason"] == "reconfigure_successful"
@@ -276,6 +279,7 @@ async def test_edit_link_removes_one_device_and_does_not_add_it_back(hass) -> No
     kept = _entry_for(hass, apple.id)
     assert kept is not None
     assert get_entry_settings(kept)["linked_device_ids"] == [apple.id]
+    assert get_entry_settings(kept)["main_device_id"] == unifi.id
     assert sonos.id not in get_entry_settings(kept)["linked_device_ids"]
 
 
@@ -609,3 +613,88 @@ async def test_similar_names_stay_suggestions_when_the_setting_is_off(hass) -> N
         {item.device_id_a, item.device_id_b} == {unifi.id, camera.id}
         for item in manager.suggestions
     )
+
+
+async def test_edit_link_lists_the_main_device_and_where_each_mac_came_from(
+    hass,
+) -> None:
+    """The form shows every device and names the source of each MAC address."""
+    await async_setup_anchor(hass)
+    unifi_config = MockConfigEntry(domain="unifi")
+    unifi_config.add_to_hass(hass)
+    shelly_config = MockConfigEntry(domain="shelly")
+    shelly_config.add_to_hass(hass)
+    matter_config = MockConfigEntry(domain="matter")
+    matter_config.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    wifi_mac = "aa:bb:cc:dd:ee:40"
+    ble_mac = "aa:bb:cc:dd:ee:41"
+    unifi = registry.async_get_or_create(
+        config_entry_id=unifi_config.entry_id,
+        identifiers={("unifi", "leak")},
+        connections={(dr.CONNECTION_NETWORK_MAC, wifi_mac)},
+        name="Leak Sensor",
+    )
+    shelly = registry.async_get_or_create(
+        config_entry_id=shelly_config.entry_id,
+        identifiers={("shelly", "leak")},
+        connections={(dr.CONNECTION_NETWORK_MAC, ble_mac)},
+        name="Leak Sensor Shelly",
+    )
+    matter = registry.async_get_or_create(
+        config_entry_id=matter_config.entry_id,
+        identifiers={("matter", "leak")},
+        name="Leak Sensor Matter",
+    )
+    hub = hub_entry(hass)
+    result = await hass.config_entries.subentries.async_init(
+        (hub.entry_id, "link"), context={"source": "user"}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={"main_device_id": unifi.id}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={"linked_device_ids": [matter.id, shelly.id]}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={"selected_mac_address": wifi_mac}
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+    link = _link_for(hass, matter.id)
+    assert link is not None
+
+    result = await hub.start_subentry_reconfigure_flow(hass, link.entry_id)
+    assert result["step_id"] == "reconfigure"
+    schema = result["data_schema"].schema
+    devices_key = next(k for k in schema if str(k) == "linked_device_ids")
+    assert set(devices_key.default()) == {unifi.id, matter.id, shelly.id}
+    mac_key = next(k for k in schema if str(k) == "selected_mac_address")
+    labels = {
+        option["value"]: option["label"] for option in schema[mac_key].config["options"]
+    }
+    assert labels == {
+        wifi_mac: f"{wifi_mac} — Leak Sensor",
+        ble_mac: f"{ble_mac} — Leak Sensor Shelly",
+    }
+
+    # Choosing the Shelly's address makes the Shelly the main device.
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            "linked_device_ids": [unifi.id, matter.id, shelly.id],
+            "selected_mac_address": ble_mac,
+        },
+    )
+    assert result["reason"] == "reconfigure_successful"
+    await hass.async_block_till_done()
+    settings = get_entry_settings(refresh(hass, link))
+    assert settings["main_device_id"] == shelly.id
+    assert set(settings["linked_device_ids"]) == {unifi.id, matter.id}
+    assert settings["mac_address"] == ble_mac
+    matter_connections = registry.async_get(matter.id).connections
+    assert (dr.CONNECTION_NETWORK_MAC, ble_mac) in matter_connections
+    assert (dr.CONNECTION_NETWORK_MAC, wifi_mac) not in matter_connections
+    assert (dr.CONNECTION_NETWORK_MAC, wifi_mac) in registry.async_get(
+        unifi.id
+    ).connections
