@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Your existing links move under the one entry the first time Home Assistant starts with 2.0.0. Devices, MAC addresses and titles are kept, and nothing is unlinked. The separate entries disappear. Going back to 1.x after this needs the links set up again.
 - **Configure** is on the Device Linker entry and holds only the matching settings. Changing a link's devices or MAC address is now **Edit link** on that link.
 - Confirming a suggestion adds a link under the Device Linker entry instead of creating a new entry.
+- **Install from the Marketplace.** The README now explains how to install from the Marketplace that replaces HACS in Home Assistant 2026.11, with its own button. The HACS steps stay for Home Assistant 2026.10 and older, and an install you already have moves over by itself.
 
 ## [1.3.0] - 2026-10-28
 

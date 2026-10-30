@@ -22,21 +22,30 @@ One device is the main device: the one that already has the MAC address, or a MA
 
 ## Installation
 
-### HACS (recommended)
+Requires **Home Assistant 2026.8 or newer**.
+
+### Marketplace (Home Assistant 2026.11 and newer)
+
+[![Open your Home Assistant instance and open this repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=bisman-automations&repository=ha-device-linker&category=integration)
+
+1. Select the button above, or go to **Settings > Marketplace**, choose **Add from link**, enter `bisman-automations/ha-device-linker` under **GitHub link**, and select **Add**. Adding a repository from a link needs a GitHub connection; the Marketplace asks you to connect one if you haven't.
+2. Install **Device Linker**. If a repair asks you to restart Home Assistant, restart it.
+
+New versions show up under **Settings > Updates**. Already installed Device Linker with HACS? There's nothing to do: Home Assistant moves it into the Marketplace the first time it starts on 2026.11.
+
+### HACS (Home Assistant 2026.10 and older)
 
 [![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=bisman-automations&repository=ha-device-linker&category=integration)
 
 1. Select the button above, or in HACS open the menu, choose **Custom repositories**, and add `https://github.com/bisman-automations/ha-device-linker` as an **Integration**.
 2. Download **Device Linker** and restart Home Assistant.
 
-Requires **Home Assistant 2026.8 or newer**.
-
 ### Manual
 
 1. Download `device_linker.zip` from the [latest release](https://github.com/bisman-automations/ha-device-linker/releases/latest).
 2. Unzip it into `config/custom_components/device_linker/` and restart Home Assistant.
 
-The zip is the integration folder itself (`manifest.json` is at the top of the archive), which is the same layout HACS uses.
+The zip is the integration folder itself (`manifest.json` is at the top of the archive), which is the same layout the Marketplace and HACS use.
 
 ## Setup
 
