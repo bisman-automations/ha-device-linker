@@ -239,7 +239,12 @@ async def test_settings_are_on_the_hub(hass) -> None:
     assert manager.settings.auto_link_similar is True
 
     result = await hass.config_entries.options.async_init(hub.entry_id)
-    assert result["step_id"] == "init"
+    assert result["type"] == "menu"
+    assert result["menu_options"] == ["settings", "cleanup"]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"next_step_id": "settings"}
+    )
+    assert result["step_id"] == "settings"
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input={CONF_AUTO_LINK_SIMILAR: False}
     )

@@ -45,6 +45,13 @@
   "options": {
     "step": {
       "init": {
+        "title": "Device Linker",
+        "menu_options": {
+          "settings": "Matching settings",
+          "cleanup": "Clean up leftover addresses"
+        }
+      },
+      "settings": {
         "title": "Device Linker settings",
         "description": "These settings apply to every link. Matching MAC addresses and hardware identifiers, and devices with exactly the same name, are linked automatically when automatic linking is on. With similar names on, a name that is the other name plus words like Camera or a model number (Deck Camera and G4 Deck Camera) is linked too. Other name matches show as discovered for you to confirm. A device with no area can match a device in any area; devices in two different areas never match by name.",
         "data": {
@@ -60,7 +67,17 @@
           "auto_link_threshold": "How alike two names must be to link them without asking.",
           "suggestion_threshold": "How alike two names must be to show them as discovered."
         }
+      },
+      "cleanup": {
+        "title": "Clean up leftover addresses",
+        "description": "These {count} addresses are still on a device, but no link uses them there any more, usually because the link was deleted before Device Linker kept track of which devices it changed. Each one is shown with the other devices that share it, which is why Home Assistant still shows them as linked. Choose the ones to remove. If you remove a MAC address the device's own integration registered, the integration adds it back on its next refresh, so a mistake does no harm.",
+        "data": {
+          "leftovers": "Addresses to remove"
+        }
       }
+    },
+    "abort": {
+      "no_leftovers": "No leftover addresses found. Every MAC address and shared ID Device Linker added is used by a current link."
     }
   },
   "entity": {

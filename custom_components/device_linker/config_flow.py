@@ -23,6 +23,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, selector
 
+from .cleanup import find_leftovers, leftover_label, remove_leftovers
 from .const import (
     CONF_ADDED_CONNECTIONS,
     CONF_AUTO_LINK,
@@ -794,10 +795,22 @@ def _check_devices(registry, main, linked_ids: list[str]) -> str | None:
     return None
 
 
+# The options form field holding the chosen leftovers.
+CONF_LEFTOVERS = "leftovers"
+
+
 class DeviceLinkerOptionsFlow(config_entries.OptionsFlow):
-    """Settings for suggestions and automatic linking."""
+    """Settings for suggestions and automatic linking, and cleaning up leftovers."""
 
     async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose what to do."""
+        return self.async_show_menu(
+            step_id="init", menu_options=["settings", "cleanup"]
+        )
+
+    async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Show and save the settings. They apply to every link."""
@@ -806,5 +819,40 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(data={})
         settings = await async_load_settings(self.hass)
         return self.async_show_form(
-            step_id="init", data_schema=vol.Schema(_suggestion_schema(settings))
+            step_id="settings", data_schema=vol.Schema(_suggestion_schema(settings))
+        )
+
+    async def async_step_cleanup(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """List addresses left behind by removed links, and remove the chosen ones."""
+        settings = await async_load_settings(self.hass)
+        leftovers = find_leftovers(self.hass, self.config_entry, settings.unlinked)
+        if user_input is not None:
+            chosen = set(user_input.get(CONF_LEFTOVERS) or [])
+            remove_leftovers(
+                self.hass, [item.key for item in leftovers if item.key in chosen]
+            )
+            return self.async_create_entry(data=dict(self.config_entry.options))
+        if not leftovers:
+            return self.async_abort(reason="no_leftovers")
+        return self.async_show_form(
+            step_id="cleanup",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_LEFTOVERS, default=[]): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(
+                                    value=item.key, label=leftover_label(item)
+                                )
+                                for item in leftovers
+                            ],
+                            multiple=True,
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    )
+                }
+            ),
+            description_placeholders={"count": str(len(leftovers))},
         )

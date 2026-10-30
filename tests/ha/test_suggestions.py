@@ -298,7 +298,12 @@ async def test_rescan_action_and_option_switches(hass) -> None:
     assert any(item.reason == "mac" for item in manager.suggestions)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    assert result["step_id"] == "init"
+    assert result["type"] == "menu"
+    assert result["menu_options"] == ["settings", "cleanup"]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"next_step_id": "settings"}
+    )
+    assert result["step_id"] == "settings"
     submitted = {
         CONF_SUGGESTION_THRESHOLD: 0.9,
         CONF_MATCH_HARDWARE: False,

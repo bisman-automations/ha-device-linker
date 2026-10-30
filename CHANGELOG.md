@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-10-30
+
+### Added
+
+- **Clean up leftover addresses.** **Configure** on the Device Linker entry now offers **Clean up leftover addresses**, next to **Matching settings**. It lists MAC addresses and shared IDs that are still on a device but that no link uses there any more, for example after deleting a link made before 1.3.0, which didn't record which devices it changed. Each one shows the other devices that share it. Tick the ones to remove.
+
+### Changed
+
+- **Configure** opens a short menu: **Matching settings** holds the settings that used to open straight away.
+
 ## [2.3.0] - 2026-10-30
 
 ### Changed
@@ -123,6 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.4.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.0.1...v2.1.0

@@ -110,9 +110,17 @@ Turn **Link strong matches automatically** off under **Configure** to go back to
 
 The **Suggestions** sensor on the Device Linker device shows how many suggestions are still waiting. Its attributes list those suggestions (devices, reason, score, and whether the name was exact), the automatic links, and the time of the last scan. **Download diagnostics** on the integration shows the same, every link, and whether each was automatic or added by hand. MAC addresses are left out of both. The count stays at 0 when everything strong was linked, and Home Assistant does not move "last changed" while the count stays 0. The **last scan** attribute is the time to look at.
 
-**Configure** on the Device Linker entry sets both similarity minimums (from 0.5 to 1) and can turn hardware matching, name matching, automatic linking, or similar-name linking off. **Rescan suggestions** looks again immediately. Registry updates are batched for a couple of seconds so a large UniFi refresh is scanned once. Device Linker also looks again after Home Assistant has finished starting, because other integrations may still be registering devices when Device Linker itself starts.
+**Configure** on the Device Linker entry has two choices. **Matching settings** sets both similarity minimums (from 0.5 to 1) and can turn hardware matching, name matching, automatic linking, or similar-name linking off. **Rescan suggestions** looks again immediately. Registry updates are batched for a couple of seconds so a large UniFi refresh is scanned once. Device Linker also looks again after Home Assistant has finished starting, because other integrations may still be registering devices when Device Linker itself starts.
+
+## Cleaning up leftover addresses
+
+Deleting a link takes its MAC address or shared ID off the devices Device Linker added it to. Links made by versions before 1.3.0 didn't record which devices those were, so deleting one of them could leave the address behind, and Home Assistant keeps showing those devices as linked.
+
+Choose **Configure** on the Device Linker entry, then **Clean up leftover addresses**. It lists every address that's still on a device but that no current link uses there, each with the device's integration and the other devices that share it. Tick the ones to remove and submit. If you remove a MAC address the device's own integration registered (UniFi registers its clients' MACs, for example), that integration adds it back on its next refresh, so a mistake does no harm.
 
 ## Troubleshooting
+
+- **Devices still show as linked after deleting their link.** Use **Clean up leftover addresses** (see above).
 
 - **A device is not listed.** It has to be registered by another integration, and it has to belong to a different config entry than the main device and the other devices you selected. A device with no config entry is not offered.
 - **Two devices that are already linked were suggested.** Home Assistant links devices that share any identifier or connection. Device Linker no longer suggests those pairs; run **Rescan suggestions** and ignore any leftover discovery.
