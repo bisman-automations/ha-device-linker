@@ -124,8 +124,8 @@ async def test_devices_sharing_an_identifier_are_not_suggested(hass) -> None:
     assert links(hass) == []
 
 
-async def test_each_link_has_a_device_named_after_its_main_device(hass) -> None:
-    """The link's own device sits under the link and is linked to its devices."""
+async def test_links_have_no_device_and_old_ones_are_removed(hass) -> None:
+    """Links stay under Device Linker; the devices 2.2.0 to 2.4.0 made are removed."""
     main, target = _devices(
         hass,
         ("main_integration", "Water Heater Leak Sensor", MAC),
@@ -144,31 +144,33 @@ async def test_each_link_has_a_device_named_after_its_main_device(hass) -> None:
     )
     assert result["type"] == "create_entry"
     await hass.async_block_till_done()
-
     (link,) = links(hass)
     registry = dr.async_get(hass)
-    (device,) = [
-        device
-        for device in dr.async_entries_for_config_entry(registry, hub.entry_id)
-        if device.config_subentry_id == link.entry_id
-    ]
-    assert device.name == "Water Heater Leak Sensor"
-    assert device.entry_type is dr.DeviceEntryType.SERVICE
-    assert (dr.CONNECTION_NETWORK_MAC, MAC) in device.connections
-    shown = {
-        other.id
-        for other in registry.async_get_devices(connections=device.connections)
-        if other.id != device.id
-    }
-    assert shown == {main.id, target.id}
 
-    # Renaming the main device renames the link's device.
-    registry.async_update_device(main.id, name_by_user="Basement Leak Sensor")
+    def link_devices():
+        return [
+            device
+            for device in dr.async_entries_for_config_entry(registry, hub.entry_id)
+            if device.config_subentry_id == link.entry_id
+        ]
+
+    assert link_devices() == []
+
+    # A device left by an older version is removed on the next start.
+    registry.async_get_or_create(
+        config_entry_id=hub.entry_id,
+        config_subentry_id=link.entry_id,
+        identifiers={(DOMAIN, f"link_{link.entry_id}")},
+        connections={(dr.CONNECTION_NETWORK_MAC, MAC)},
+        name="Water Heater Leak Sensor",
+        entry_type=dr.DeviceEntryType.SERVICE,
+    )
+    assert len(link_devices()) == 1
+    assert await hass.config_entries.async_reload(hub.entry_id)
     await hass.async_block_till_done()
-    assert registry.async_get(device.id).name == "Basement Leak Sensor"
-
-    await remove_link(hass, link)
-    assert registry.async_get(device.id) is None
+    assert link_devices() == []
+    # The link itself still works.
+    assert (dr.CONNECTION_NETWORK_MAC, MAC) in registry.async_get(target.id).connections
 
 
 async def _service_case(hass):

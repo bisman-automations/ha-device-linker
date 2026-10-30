@@ -61,8 +61,6 @@ Each link is listed under the Device Linker entry, the way a group of devices is
 
    No MAC address in common? Type another ID the devices share instead, such as a serial number or a VIN. Every device in the link gets it, the main device included, and Home Assistant shows them as linked. Something that looks like part of a MAC address (`AA:BB:CC`) is refused, so a typo doesn't become an ID by mistake.
 
-Each link gets a small device of its own, named after its main device and shown under the link on the Device Linker page. Open it to see the main device and every linked device under **Linked devices**, one click each. It also shows up under **Linked devices** on those devices' pages, as a shortcut back to the link.
-
 The confirmation screen lists the selected device names. If the address is already in use, the error names the device that has it. Choose a different MAC or a different device.
 
 **Upgrading from 1.x.** Each link used to be its own Device Linker entry. The first start after upgrading moves every one of them under a single Device Linker entry, keeping the devices, MAC addresses and titles. Nothing is unlinked along the way, and the old entries disappear.
@@ -102,7 +100,7 @@ A name is linked automatically only when exactly one of the devices has exactly 
 
 **UniFi example.** UniFi Network registers **Living Room TV** with a MAC connection and no area. The Apple TV integration registers **Living Room TV** in the Living Room and does not have a MAC. HomeKit or Shelly might register the same name again. Device Linker adds one link, **Link Living Room TV to N devices**, anchored on the UniFi device, and copies the UniFi MAC onto the others. Home Assistant then shows them under **Linked devices**. The **Suggestions** sensor can still read 0, because there is nothing left to confirm. The new link and the repair are the result.
 
-A device is not linked or suggested when it is disabled, when it belongs to the same config entry (Home Assistant cannot put one MAC on two of that entry's devices), when the two devices already share a MAC connection, when it is a service rather than a device (what an integration adds next to your devices, such as a Daily Routine routine or Device Linker's own link devices), or when you have already ignored or unlinked that pair. An existing link does not hide a different device: a third **Living Room TV** is added to the same link.
+A device is not linked or suggested when it is disabled, when it belongs to the same config entry (Home Assistant cannot put one MAC on two of that entry's devices), when the two devices already share a MAC connection, when it is a service rather than a device (what an integration adds next to your devices, such as a Daily Routine routine), or when you have already ignored or unlinked that pair. An existing link does not hide a different device: a third **Living Room TV** is added to the same link.
 
 Weaker matches still appear under **Settings > Devices & services** as a discovered integration: **Link X with Y?** Confirming it adds the link under the Device Linker entry. **Ignore** dismisses that pair and does not offer it again, including after a restart.
 
