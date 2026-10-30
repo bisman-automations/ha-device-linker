@@ -66,6 +66,7 @@ from .registry import (
     hub_entry,
     is_hub,
     is_mac,
+    is_service,
     link_settings,
     link_title,
     link_unique_id,
@@ -137,7 +138,7 @@ def _device_options(
                 and device.config_entry_id == exclude_config_entry_id
             ):
                 continue
-            if get_device(registry, device.id) is None:
+            if get_device(registry, device.id) is None or is_service(device):
                 continue
             options.append(
                 selector.SelectOptionDict(

@@ -75,7 +75,14 @@ from .matching import (
     suggest,
     suggestion_unique_id,
 )
-from .registry import get_device, hub_entry, iter_links, link_title, link_unique_id
+from .registry import (
+    get_device,
+    hub_entry,
+    is_service,
+    iter_links,
+    link_title,
+    link_unique_id,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -717,8 +724,10 @@ def _device_views(hass: HomeAssistant) -> list[DeviceView]:
     areas = ar.async_get(hass)
     views: list[DeviceView] = []
     for device in _iter_devices(registry):
-        if device.disabled_by is not None or getattr(
-            device, "is_composite_device", False
+        if (
+            device.disabled_by is not None
+            or getattr(device, "is_composite_device", False)
+            or is_service(device)
         ):
             continue
         if not device.config_entry_id:

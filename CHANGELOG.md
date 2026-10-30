@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-10-30
+
+### Changed
+
+- **Only devices are linked, not services.** Services are what integrations add next to your devices, such as a Daily Routine routine or the Ford Assistant helper for your car. They are no longer suggested, linked automatically, or offered in Add link, even when a routine is named after the curtains it closes. Automatic links that already include a service lose it the next time Home Assistant starts. Links you made yourself are left as they are.
+
 ## [2.2.0] - 2026-10-30
 
 ### Added
@@ -117,6 +123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.3.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.0.0...v2.0.1

@@ -38,6 +38,7 @@ from .const import (
     HUB_UNIQUE_ID,
     LINKS_STORAGE_KEY,
     LINKS_STORAGE_VERSION,
+    ORIGIN_AUTO,
     ORIGIN_MANUAL,
     SUBENTRY_LINK,
 )
@@ -48,8 +49,10 @@ from .registry import (
     hub_entry,
     hub_links,
     is_hub,
+    is_service,
     link_item,
     link_settings,
+    link_title,
     link_unique_id,
 )
 
@@ -168,6 +171,7 @@ class LinkRuntime:
                 for subentry_id, data in stored["links"].items()
                 if isinstance(data, dict) and CONF_MAC_ADDRESS in data
             }
+        _drop_services_from_automatic_links(self.hass, self.entry)
         await self.async_reconcile(scan=False)
         self._unsub = self.hass.bus.async_listen(
             dr.EVENT_DEVICE_REGISTRY_UPDATED, self._restore_owned_links
@@ -315,6 +319,53 @@ def _add_owned(
                 value,
                 device_id,
             )
+
+
+@callback
+def _drop_services_from_automatic_links(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """Take service devices out of links Device Linker made on its own.
+
+    Before 2.3.0, automatic linking could pair a device with an integration's
+    service (a Daily Routine routine named after the curtains it opens). Only
+    automatic links are changed; a link made by hand is left as it is. The
+    reconcile that follows takes the shared value off the removed devices.
+    """
+    registry = dr.async_get(hass)
+    for subentry_id, settings in hub_links(entry).items():
+        if settings[CONF_ORIGIN] != ORIGIN_AUTO:
+            continue
+        subentry = entry.subentries[subentry_id]
+        main_id = settings[CONF_MAIN_DEVICE_ID]
+        main = get_device(registry, main_id) if isinstance(main_id, str) else None
+        linked = [d for d in settings[CONF_LINKED_DEVICE_IDS] if isinstance(d, str)]
+        keep = [
+            d
+            for d in linked
+            if (device := get_device(registry, d)) is None or not is_service(device)
+        ]
+        if (main is not None and is_service(main)) or not keep:
+            hass.config_entries.async_remove_subentry(entry, subentry_id)
+            continue
+        if keep == linked:
+            continue
+        added = dict(settings[CONF_ADDED_CONNECTIONS])
+        hass.config_entries.async_update_subentry(
+            entry,
+            subentry,
+            title=link_title(
+                (main.name_by_user or main.name or main.id)
+                if main is not None
+                else subentry.title.removeprefix("Link ").rsplit(" to ", 1)[0],
+                len(keep),
+            ),
+            data={
+                **settings,
+                CONF_LINKED_DEVICE_IDS: keep,
+                CONF_ADDED_CONNECTIONS: {d: bool(added.get(d, False)) for d in keep},
+            },
+        )
 
 
 def _link_device_identifier(subentry_id: str) -> tuple[str, str]:

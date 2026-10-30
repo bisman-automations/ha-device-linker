@@ -11,7 +11,11 @@ from custom_components.device_linker.const import (
     DOMAIN,
     SERVICE_RESCAN,
 )
-from custom_components.device_linker.manager import async_get_manager
+from custom_components.device_linker.manager import (
+    async_get_manager,
+    link_payload,
+    save_link,
+)
 from custom_components.device_linker.registry import normalize_link_value
 from homeassistant.helpers import device_registry as dr
 from tests.ha.helpers import links, remove_link
@@ -165,3 +169,87 @@ async def test_each_link_has_a_device_named_after_its_main_device(hass) -> None:
 
     await remove_link(hass, link)
     assert registry.async_get(device.id) is None
+
+
+async def _service_case(hass):
+    curtain_config = MockConfigEntry(domain="matter")
+    curtain_config.add_to_hass(hass)
+    routine_config = MockConfigEntry(domain="daily_routine")
+    routine_config.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    curtain = registry.async_get_or_create(
+        config_entry_id=curtain_config.entry_id,
+        identifiers={("matter", "curtain")},
+        connections={(dr.CONNECTION_NETWORK_MAC, MAC)},
+        name="Boy's Bedroom Curtains",
+    )
+    routine = registry.async_get_or_create(
+        config_entry_id=routine_config.entry_id,
+        identifiers={("daily_routine", "close_curtains")},
+        name="Boy's Bedroom Curtains",
+        entry_type=dr.DeviceEntryType.SERVICE,
+    )
+    return curtain, routine
+
+
+async def test_services_are_never_suggested_or_offered(hass) -> None:
+    """A routine named after the curtains it closes is a service, not the curtains."""
+    hub = await _setup_hub(hass)
+    curtain, routine = await _service_case(hass)
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+    manager = async_get_manager(hass)
+    assert not any(
+        routine.id in {item.device_id_a, item.device_id_b}
+        for item in manager.suggestions
+    )
+    assert links(hass) == []
+
+    result = await _add_link(hass, hub)
+    schema = result["data_schema"].schema
+    key = next(k for k in schema if str(k) == CONF_MAIN_DEVICE_ID)
+    offered = {option["value"] for option in schema[key].config["options"]}
+    assert curtain.id in offered
+    assert routine.id not in offered
+
+
+async def test_an_automatic_link_with_a_service_is_cleaned_up(hass) -> None:
+    """Automatic links made before 2.3.0 lose their service devices on start."""
+    hub = await _setup_hub(hass)
+    curtain, routine = await _service_case(hass)
+    blind_config = MockConfigEntry(domain="switchbot")
+    blind_config.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    blind = registry.async_get_or_create(
+        config_entry_id=blind_config.entry_id,
+        identifiers={("switchbot", "curtain")},
+        name="Boy's Bedroom Curtains",
+    )
+    save_link(
+        hass,
+        hub,
+        None,
+        link_payload(
+            curtain.id,
+            [routine.id, blind.id],
+            MAC,
+            {routine.id: True, blind.id: True},
+            "auto",
+        ),
+        "Link Boy's Bedroom Curtains to 2 devices",
+        f"{curtain.id}_{MAC}",
+    )
+    await hass.async_block_till_done()
+    assert (dr.CONNECTION_NETWORK_MAC, MAC) in registry.async_get(
+        routine.id
+    ).connections
+
+    assert await hass.config_entries.async_reload(hub.entry_id)
+    await hass.async_block_till_done()
+    (link,) = links(hass)
+    assert link.settings[CONF_LINKED_DEVICE_IDS] == [blind.id]
+    assert link.title == "Link Boy's Bedroom Curtains to 1 device"
+    assert (dr.CONNECTION_NETWORK_MAC, MAC) not in registry.async_get(
+        routine.id
+    ).connections
+    assert (dr.CONNECTION_NETWORK_MAC, MAC) in registry.async_get(blind.id).connections

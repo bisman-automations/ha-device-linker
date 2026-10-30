@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import (
     CONNECTION_NETWORK_MAC,
     DeviceEntry,
+    DeviceEntryType,
     DeviceRegistry,
     format_mac,
 )
@@ -95,6 +96,16 @@ _BARE_MAC = re.compile(r"[0-9A-Fa-f]{12}")
 _PARTIAL_MAC = re.compile(r"[0-9A-Fa-f]{1,2}(?:[:-][0-9A-Fa-f]{0,2})+")
 # Longest shared ID accepted in place of a MAC address (a VIN is 17 characters).
 MAX_SHARED_ID_LENGTH = 100
+
+
+def is_service(device: DeviceEntry) -> bool:
+    """Whether this is a service (an integration's own helper), not hardware.
+
+    Daily Routine's routines, Ford Assistant's vehicle helper and Device
+    Linker's own devices are services. Only devices are linked; services that
+    belong with a device link themselves.
+    """
+    return device.entry_type is DeviceEntryType.SERVICE
 
 
 def normalize_link_value(raw: object) -> str | None:
