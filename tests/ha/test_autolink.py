@@ -70,7 +70,7 @@ async def test_unifi_same_name_links_when_the_client_has_no_area(hass) -> None:
         case.shelly.id,
         case.kitchen_same_name.id,
     }
-    assert tv.title == "Link Living Room TV to 4 devices"
+    assert tv.title == "Living Room TV (5 Devices Linked)"
     # Near name shares one distinctive word and one side has no area.
     assert case.near_name.id not in settings["linked_device_ids"]
     # A one-word name with no area is not linked to every TV.
@@ -117,7 +117,7 @@ async def test_unifi_same_name_links_when_the_client_has_no_area(hass) -> None:
     hall = _entry_for(hass, case.hall_esphome.id)
     assert hall is not None
     assert get_entry_settings(hall)["main_device_id"] == case.hall_unifi.id
-    assert hall.title == "Link Hall Tablet to 1 device"
+    assert hall.title == "Hall Tablet (2 Devices Linked)"
 
     # Exact name whose distinctive words are empty ("Hall" + "Light").
     light = _entry_for(hass, case.hall_light.id)
@@ -136,7 +136,7 @@ async def test_unifi_same_name_links_when_the_client_has_no_area(hass) -> None:
     assert state is not None
     assert state.attributes["last_scan"]
     assert any(
-        item["title"] == "Link Living Room TV to 4 devices"
+        item["title"] == "Living Room TV (5 Devices Linked)"
         for item in state.attributes["auto_linked"]
     )
 
@@ -166,7 +166,7 @@ async def test_exact_pair_leaves_the_suggestion_count_at_zero(hass) -> None:
 
     entry = _entry_for(hass, apple.id)
     assert entry is not None
-    assert entry.title == "Link Living Room TV to 1 device"
+    assert entry.title == "Living Room TV (2 Devices Linked)"
     assert get_entry_settings(entry)["main_device_id"] == unifi.id
     assert manager.suggestions == []
     state_id = er.async_get(hass).async_get_entity_id(
@@ -333,7 +333,7 @@ async def test_manual_entry_gains_another_device_without_changing_origin(hass) -
     settings = get_entry_settings(updated)
     assert settings[CONF_ORIGIN] == "manual"
     assert set(settings["linked_device_ids"]) == {shelly.id, esphome.id}
-    assert updated.title == "Link Garage Door to 2 devices"
+    assert updated.title == "Garage Door (3 Devices Linked)"
     # Both old entries were folded into one hub; the second one is gone.
     hub = hub_entry(hass)
     assert hub.version == 3
@@ -538,7 +538,7 @@ async def test_copied_mac_does_not_anchor_the_next_device(hass) -> None:
     settings = get_entry_settings(updated)
     assert settings["main_device_id"] == unifi.id
     assert set(settings["linked_device_ids"]) == {apple.id, extra.id}
-    assert updated.title == "Link Living Room TV to 2 devices"
+    assert updated.title == "Living Room TV (3 Devices Linked)"
     assert all(
         get_entry_settings(entry)["main_device_id"] != apple.id
         for entry in _links(hass)
@@ -674,8 +674,8 @@ async def test_edit_link_lists_the_main_device_and_where_each_mac_came_from(
         option["value"]: option["label"] for option in schema[mac_key].config["options"]
     }
     assert labels == {
-        wifi_mac: f"{wifi_mac} — Leak Sensor",
-        ble_mac: f"{ble_mac} — Leak Sensor Shelly",
+        wifi_mac: f"{wifi_mac} — Leak Sensor (unifi)",
+        ble_mac: f"{ble_mac} — Leak Sensor Shelly (shelly)",
     }
 
     # Choosing the Shelly's address makes the Shelly the main device.

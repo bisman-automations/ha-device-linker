@@ -81,6 +81,7 @@
         "title": "Device Linker settings",
         "description": "These settings apply to every link. Matching MAC addresses and hardware identifiers, and devices with exactly the same name, are linked automatically when automatic linking is on. With similar names on, a name that is the other name plus words like Camera or a model number (Deck Camera and G4 Deck Camera) is linked too. Other name matches show as discovered for you to confirm. A device with no area can match a device in any area; devices in two different areas never match by name.",
         "data": {
+          "preferred_mac_sources": "Preferred MAC address sources",
           "auto_link": "Link strong matches automatically",
           "auto_link_similar": "Link similar names automatically",
           "auto_link_threshold": "Automatic name similarity",
@@ -95,7 +96,8 @@
           "auto_link_threshold": "How alike two names must be to link them without asking.",
           "suggestion_threshold": "How alike two names must be to show them as discovered.",
           "include_services": "Off: services are left out, such as Daily Routine routines and Music Assistant players, which are software rather than hardware. On: they can be suggested, linked automatically and chosen in Add link like any other device.",
-          "ignored_devices": "These devices are never suggested or linked automatically. Remove a device to have it suggested again. You can still link it yourself with Add link."
+          "ignored_devices": "These devices are never suggested or linked automatically. Remove a device to have it suggested again. You can still link it yourself with Add link.",
+          "preferred_mac_sources": "Integrations you trust to report a device's real MAC address, most trusted first, such as UniFi. When a link has a choice, the address from the first of these is picked, its device becomes the main device, and its name names the link. The order is the order you add them: to move one, remove it and add it again."
         }
       },
       "cleanup": {

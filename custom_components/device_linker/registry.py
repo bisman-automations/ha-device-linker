@@ -1,6 +1,6 @@
 """Device registry access, link settings, and finding the hub's links."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 import re
 from typing import Any
 
@@ -32,6 +32,7 @@ from .const import (
     ORIGIN_MANUAL,
     SUBENTRY_LINK,
 )
+from .matching import integration_rank
 
 
 def text_pairs(items: Iterable[Any]) -> tuple[tuple[str, str], ...]:
@@ -204,10 +205,68 @@ def link_unique_id(main_device_id: str | None, mac: str) -> str:
     return f"{main_device_id or 'manual'}_{mac}"
 
 
-def link_title(main_name: str, count: int) -> str:
-    """Title used for manual and automatic entries, such as ``Link TV to 2 devices``."""
-    noun = "device" if count == 1 else "devices"
-    return f"Link {main_name} to {count} {noun}"
+def link_title(name: str, count: int) -> str:
+    """A link's title: ``Boy's Bedroom Hub (4 Devices Linked)``.
+
+    ``count`` is every device in the link. :func:`retitle_links` gives every
+    link this title, named after its best device.
+    """
+    noun = "Device" if count == 1 else "Devices"
+    return f"{name} ({count} {noun} Linked)"
+
+
+# A connection word in brackets at the end of a name: "Curtain (BLE)".
+_CONNECTION_SUFFIX = re.compile(
+    r"\s*\((?:ble|bluetooth|cloud|matter|zigbee|z-?wave|wi-?fi|ethernet|lan|thread)\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def link_name(
+    hass: HomeAssistant, settings: Mapping[str, Any], preferred: Sequence[str]
+) -> tuple[str, int] | None:
+    """The name a link is shown with, and how many devices it has.
+
+    The name is the device from the most trusted MAC source (the preferred
+    MAC sources setting), else the main device (the one the address came
+    from), else the first device, without a connection tag like "(BLE)".
+    """
+    registry = async_get_device_registry(hass)
+    main_id = settings.get(CONF_MAIN_DEVICE_ID)
+    ids = [main_id] if isinstance(main_id, str) else []
+    ids += [
+        d
+        for d in settings.get(CONF_LINKED_DEVICE_IDS) or []
+        if isinstance(d, str) and d not in ids
+    ]
+    members = [device for device in (get_device(registry, d) for d in ids) if device]
+    if not members:
+        return None
+
+    def rank(item: tuple[int, DeviceEntry]) -> tuple[int, int, int]:
+        index, device = item
+        entry = hass.config_entries.async_get_entry(device.config_entry_id)
+        domain = entry.domain if entry else ""
+        return (integration_rank(domain, preferred), device.id != main_id, index)
+
+    _index, best = min(enumerate(members), key=rank)
+    name = best.name_by_user or best.name or best.id
+    return _CONNECTION_SUFFIX.sub("", name).strip() or name, len(members)
+
+
+def retitle_links(hass: HomeAssistant, preferred: Sequence[str]) -> None:
+    """Give every link its current title. Changes only titles that differ."""
+    hub = hub_entry(hass)
+    if hub is None:
+        return
+    for subentry_id, settings in hub_links(hub).items():
+        found = link_name(hass, settings, preferred)
+        subentry = hub.subentries.get(subentry_id)
+        if found is None or subentry is None:
+            continue
+        title = link_title(*found)
+        if subentry.title != title:
+            hass.config_entries.async_update_subentry(hub, subentry, title=title)
 
 
 def is_hub(entry: ConfigEntry) -> bool:

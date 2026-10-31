@@ -355,3 +355,69 @@ async def test_each_mac_names_the_device_and_integration_it_came_from(hass) -> N
         "02:11:22:33:44:55": "02:11:22:33:44:55 — Family Room speaker (unifi)",
         "02:66:77:88:99:aa": "02:66:77:88:99:aa — Family Room speaker (apple_tv)",
     }
+
+
+async def test_preferred_mac_sources_order_and_preselect(hass) -> None:
+    """The settings list decides which address a suggestion picks first."""
+    entry = await _anchor(hass)
+    await _disable_auto_link(hass)
+    unifi = _register(
+        hass,
+        domain="unifi",
+        name="Den Hub",
+        area="Den",
+        connections={(dr.CONNECTION_NETWORK_MAC, "02:00:00:00:00:52")},
+    )
+    other = _register(
+        hass,
+        domain="switchbot",
+        name="Den Hub",
+        area="Den",
+        connections={(dr.CONNECTION_NETWORK_MAC, "02:00:00:00:00:51")},
+    )
+    manager = async_get_manager(hass)
+    await manager.async_scan()
+
+    async def shown():
+        flow = next(
+            flow
+            for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+            if flow["context"].get("unique_id")
+            == suggestion_unique_id(unifi.id, other.id)
+        )
+        result = await hass.config_entries.flow.async_configure(flow["flow_id"])
+        key = next(
+            k for k in result["data_schema"].schema if str(k) == "selected_mac_address"
+        )
+        values = [
+            o["value"] for o in result["data_schema"].schema[key].config["options"]
+        ]
+        default = key.default() if callable(key.default) else None
+        return values, default
+
+    # Out of the box UniFi is trusted first: its address leads and is chosen.
+    values, default = await shown()
+    assert values == ["02:00:00:00:00:52", "02:00:00:00:00:51"]
+    assert default == "02:00:00:00:00:52"
+
+    # The settings show that list; putting SwitchBot first flips it.
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"next_step_id": "settings"}
+    )
+    defaults = result["data_schema"]({})
+    assert defaults["preferred_mac_sources"][0] == "unifi"
+    key = next(
+        k for k in result["data_schema"].schema if str(k) == "preferred_mac_sources"
+    )
+    offered = [o["value"] for o in result["data_schema"].schema[key].config["options"]]
+    assert "switchbot" in offered
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={**defaults, "preferred_mac_sources": ["switchbot", "unifi"]},
+    )
+    await hass.async_block_till_done()
+    assert manager.settings.preferred_mac_sources == ("switchbot", "unifi")
+    values, default = await shown()
+    assert values == ["02:00:00:00:00:51", "02:00:00:00:00:52"]
+    assert default == "02:00:00:00:00:51"

@@ -879,3 +879,30 @@ def test_two_different_brands_are_not_a_name_match() -> None:
     assert score == 1.0
     score, _ = matching._name_score("Sonos Kitchen Speaker", "Kitchen Speaker", None)
     assert score >= 0.8
+
+
+def test_the_preferred_integration_supplies_the_address() -> None:
+    """Both have a MAC: the one from the most trusted integration is the main device."""
+    unifi = _device(
+        "u",
+        name="Den Hub",
+        integration="unifi",
+        connections=(("mac", "aa:bb:cc:dd:ee:51"),),
+    )
+    other = _device(
+        "s",
+        name="Den Hub",
+        integration="switchbot",
+        connections=(("mac", "aa:bb:cc:dd:ee:52"),),
+    )
+    assert matching._name_anchor(unifi, other, set()) == (None, None)
+    assert matching._name_anchor(other, unifi, set(), ("unifi",)) == (
+        "u",
+        "aa:bb:cc:dd:ee:51",
+    )
+    assert matching._name_anchor(unifi, other, set(), ("switchbot", "unifi")) == (
+        "s",
+        "aa:bb:cc:dd:ee:52",
+    )
+    # Neither on the list: still left for you to choose.
+    assert matching._name_anchor(unifi, other, set(), ("esphome",)) == (None, None)

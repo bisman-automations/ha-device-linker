@@ -8,5 +8,5 @@
   "documentation": "https://github.com/bisman-automations/ha-device-linker",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/bisman-automations/ha-device-linker/issues",
-  "version": "2.8.0"
+  "version": "2.9.0"
 }

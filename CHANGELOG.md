@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2026-10-30
+
+### Added
+
+- **Preferred MAC address sources.** A new list in **Matching settings** names the integrations you trust to report a device's real MAC address, most trusted first. Out of the box that's network integrations such as UniFi. When a link has a choice of addresses, the one from the first integration on the list is picked and listed first: in suggestions, in **Add link**, and in **Edit link**. When two devices in a match each have an address, the device from the trusted integration becomes the main device, so more matches can be linked without asking.
+
+### Changed
+
+- **Links have clearer names.** A link is now called, for example, "Boy's Bedroom Hub (4 Devices Linked)" instead of "Link Boy's Bedroom Hub to 3 devices". It's named after the device from your most trusted MAC source, else the device the address came from, without a tag like "(BLE)", and counts every device in it. Existing links are renamed, and the name updates whenever devices are added or removed or the preferred sources change.
+- **Edit link names the integration of each address**, and lists addresses in your preferred order.
+
 ## [2.8.0] - 2026-10-30
 
 ### Added
@@ -194,6 +205,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.9.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.7.1...v2.8.0
 [2.7.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.6.0...v2.7.0

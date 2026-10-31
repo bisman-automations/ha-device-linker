@@ -455,6 +455,7 @@ def suggest(
     match_hardware: bool = True,
     match_names: bool = True,
     copied_macs: set[tuple[str, str]] | None = None,
+    preferred_integrations: Sequence[str] = (),
 ) -> list[Suggestion]:
     """Return suggestions, best first.
 
@@ -506,6 +507,7 @@ def suggest(
             dismissed=dismissed,
             threshold=threshold,
             copied_macs=copied,
+            preferred=tuple(preferred_integrations),
         )
 
     return sorted(best.values(), key=_sort_key)
@@ -519,6 +521,7 @@ def _match_names(
     dismissed: set[str],
     threshold: float,
     copied_macs: set[tuple[str, str]],
+    preferred: tuple[str, ...] = (),
 ) -> None:
     """Add name suggestions.
 
@@ -547,6 +550,7 @@ def _match_names(
                     threshold=threshold,
                     known_exact=True,
                     copied_macs=copied_macs,
+                    preferred=preferred,
                 )
 
     has_mac = {
@@ -582,6 +586,7 @@ def _match_names(
                     threshold=threshold,
                     known_exact=False,
                     copied_macs=copied_macs,
+                    preferred=preferred,
                 )
 
 
@@ -595,6 +600,7 @@ def _consider_name(
     threshold: float,
     known_exact: bool,
     copied_macs: set[tuple[str, str]],
+    preferred: tuple[str, ...] = (),
 ) -> None:
     """Score one area-compatible name pair and keep it when it qualifies."""
     if not _areas_compatible(left, right):
@@ -612,7 +618,7 @@ def _consider_name(
         score, exact = _name_score(left.name, right.name, area_name)
         if score < threshold:
             return
-    anchor_id, mac = _name_anchor(left, right, copied_macs)
+    anchor_id, mac = _name_anchor(left, right, copied_macs, preferred)
     _consider(
         best,
         _suggestion(
@@ -829,13 +835,15 @@ def _name_anchor(
     left: DeviceView,
     right: DeviceView,
     copied_macs: set[tuple[str, str]],
+    preferred: Sequence[str] = (),
 ) -> tuple[str | None, str | None]:
-    """Return ``(device id, mac)`` when exactly one side has one network MAC.
+    """Return ``(device id, mac)`` for the device whose address to share.
 
-    MACs this integration copied on are ignored, so the device that originally
-    had the address stays the anchor. Two different addresses, several
-    addresses on one device, or no address at all is left for the user to
-    confirm.
+    Exactly one side with one network MAC is the anchor. When both have one,
+    the device from the integration earlier in ``preferred`` (the "Preferred
+    MAC address sources" setting, such as UniFi) is the anchor. MACs this
+    integration copied on are ignored, so the device that originally had the
+    address stays the anchor. Anything else is left for the user to confirm.
     """
     left_macs = _native_network_macs(left, copied_macs)
     right_macs = _native_network_macs(right, copied_macs)
@@ -843,7 +851,22 @@ def _name_anchor(
         return left.device_id, next(iter(left_macs))
     if len(right_macs) == 1 and not left_macs:
         return right.device_id, next(iter(right_macs))
+    if len(left_macs) == 1 and len(right_macs) == 1:
+        left_rank = integration_rank(left.integration, preferred)
+        right_rank = integration_rank(right.integration, preferred)
+        if left_rank < right_rank:
+            return left.device_id, next(iter(left_macs))
+        if right_rank < left_rank:
+            return right.device_id, next(iter(right_macs))
     return None, None
+
+
+def integration_rank(integration: str | None, preferred: Sequence[str]) -> int:
+    """Position in the preferred MAC sources; unlisted integrations come last."""
+    try:
+        return list(preferred).index(integration or "")
+    except ValueError:
+        return len(preferred)
 
 
 def _native_network_macs(

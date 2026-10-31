@@ -42,7 +42,12 @@ from .const import (
     ORIGIN_MANUAL,
     SUBENTRY_LINK,
 )
-from .manager import SuggestionManager, async_load_settings, async_remember_unlinked
+from .manager import (
+    SuggestionManager,
+    async_load_settings,
+    async_remember_unlinked,
+    preferred_mac_sources,
+)
 from .matching import pairs_among, pairs_touching
 from .registry import (
     get_device,
@@ -54,6 +59,7 @@ from .registry import (
     link_settings,
     link_title,
     link_unique_id,
+    retitle_links,
     text_pairs,
 )
 
@@ -229,6 +235,15 @@ class LinkRuntime:
                     }
                 }
             )
+        # Every link is named after its best device and counts its devices.
+        retitle_links(
+            self.hass,
+            preferred_mac_sources(
+                self.manager.settings
+                if self.manager is not None
+                else await async_load_settings(self.hass)
+            ),
+        )
         if scan and self.manager is not None:
             await self.manager.async_scan()
 
@@ -353,7 +368,7 @@ def _drop_services_from_automatic_links(
                 (main.name_by_user or main.name or main.id)
                 if main is not None
                 else subentry.title.removeprefix("Link ").rsplit(" to ", 1)[0],
-                len(keep),
+                len(keep) + bool(main),
             ),
             data={
                 **settings,

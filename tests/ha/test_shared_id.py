@@ -62,7 +62,7 @@ async def test_a_vin_links_two_devices_without_a_mac(hass) -> None:
         result["flow_id"], user_input={CONF_MAC_ADDRESS: VIN}
     )
     assert result["type"] == "create_entry"
-    assert result["title"] == "Link Family Car to 2 devices"
+    assert result["title"] == "Family Car (2 Devices Linked)"
     await hass.async_block_till_done()
 
     (link,) = links(hass)
@@ -258,7 +258,7 @@ async def test_an_automatic_link_with_a_service_is_cleaned_up(hass) -> None:
     await hass.async_block_till_done()
     (link,) = links(hass)
     assert link.settings[CONF_LINKED_DEVICE_IDS] == [blind.id]
-    assert link.title == "Link Boy's Bedroom Curtains to 1 device"
+    assert link.title == "Boy's Bedroom Curtains (2 Devices Linked)"
     assert (dr.CONNECTION_NETWORK_MAC, MAC) not in registry.async_get(
         routine.id
     ).connections

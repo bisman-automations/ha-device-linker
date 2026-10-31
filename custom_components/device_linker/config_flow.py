@@ -23,6 +23,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, selector
+from homeassistant.loader import LoaderError, async_get_loaded_integration
 
 from .cleanup import find_leftovers, leftover_label, remove_leftovers
 from .const import (
@@ -40,6 +41,7 @@ from .const import (
     CONF_MATCH_NAMES,
     CONF_NEVER_SUGGEST,
     CONF_ORIGIN,
+    CONF_PREFERRED_MAC_SOURCES,
     CONF_SELECTED_MAC_ADDRESS,
     CONF_SUGGESTION_THRESHOLD,
     CONFIG_VERSION,
@@ -64,9 +66,10 @@ from .manager import (
     may_join,
     may_link,
     plan_entry_data,
+    preferred_mac_sources,
     save_link,
 )
-from .matching import normalize_mac
+from .matching import integration_rank, normalize_mac
 from .registry import (
     already_linked,
     device_has_link,
@@ -189,19 +192,19 @@ def _submitted_mac(user_input: dict[str, Any]) -> str:
     )
 
 
-def _mac_sources(hass: HomeAssistant, *devices) -> dict[str, str]:
-    """Label each MAC address with the devices it came from.
+def _mac_origins(hass: HomeAssistant, *devices) -> dict[str, list[tuple[str, str]]]:
+    """Each MAC address with the devices it came from: ``(label, domain)``.
 
     A MAC registered as a connection, or carried in an identifier (a Shelly
-    or Zigbee device's own MAC), is named with that device and its
-    integration: ``"Kitchen Speaker (unifi)"``.
+    or Zigbee device's own MAC), counts for that device.
     """
-    sources: dict[str, list[str]] = {}
+    origins: dict[str, list[tuple[str, str]]] = {}
     for device in devices:
         if device is None:
             continue
         entry = hass.config_entries.async_get_entry(device.config_entry_id)
-        label = _device_label(device, entry.domain if entry else "unknown", False)
+        domain = entry.domain if entry else "unknown"
+        label = _device_label(device, domain, False)
         values = {
             dr.format_mac(value)
             for kind, value in text_pairs(device.connections)
@@ -213,9 +216,44 @@ def _mac_sources(hass: HomeAssistant, *devices) -> dict[str, str]:
             if (mac := normalize_mac(value))
         }
         for mac in values:
-            if label not in sources.setdefault(mac, []):
-                sources[mac].append(label)
-    return {mac: ", ".join(labels) for mac, labels in sources.items()}
+            if (label, domain) not in origins.setdefault(mac, []):
+                origins[mac].append((label, domain))
+    return origins
+
+
+def _mac_sources(hass: HomeAssistant, *devices) -> dict[str, str]:
+    """Label each MAC address with the devices it came from.
+
+    ``"Kitchen Speaker (unifi)"``, several joined with commas.
+    """
+    return {
+        mac: ", ".join(label for label, _domain in pairs)
+        for mac, pairs in _mac_origins(hass, *devices).items()
+    }
+
+
+def _rank_macs(
+    hass: HomeAssistant, macs: list[str], devices, preferred: tuple[str, ...]
+) -> tuple[list[str], str | None]:
+    """Order addresses by the preferred MAC sources, most trusted first.
+
+    Returns the ordered list and the address to preselect: the one from the
+    most trusted integration, when it is on the list.
+    """
+    origins = _mac_origins(hass, *devices)
+
+    def rank(mac: str) -> int:
+        return min(
+            (
+                integration_rank(domain, preferred)
+                for _l, domain in origins.get(mac, [])
+            ),
+            default=len(preferred),
+        )
+
+    ordered = sorted(macs, key=lambda mac: (rank(mac), mac))
+    top = ordered[0] if ordered and rank(ordered[0]) < len(preferred) else None
+    return ordered, top
 
 
 def _mac_schema(
@@ -224,6 +262,7 @@ def _mac_schema(
     sources: dict[str, str] | None = None,
     *,
     required: bool = True,
+    preselect: str | None = None,
 ) -> dict:
     """MAC fields: discovered choices plus a manual override.
 
@@ -233,9 +272,11 @@ def _mac_schema(
     sources = sources or {}
     schema: dict[vol.Marker, object] = {}
     if current and discovered and current not in discovered:
-        discovered = sorted([*discovered, current])
+        discovered = [*discovered, current]
     if discovered:
-        default = current or (discovered[0] if len(discovered) == 1 else None)
+        default = (
+            current or preselect or (discovered[0] if len(discovered) == 1 else None)
+        )
         key = (
             vol.Optional(CONF_SELECTED_MAC_ADDRESS, default=default)
             if default
@@ -328,9 +369,57 @@ def _connection_conflicts(
     return sorted(conflicts, key=str.casefold)
 
 
-def _suggestion_schema(settings) -> dict[vol.Marker, object]:
+def _mac_source_options(
+    hass: HomeAssistant, chosen: tuple[str, ...]
+) -> list[selector.SelectOptionDict]:
+    """Integrations that register MAC addresses, plus any already chosen."""
+    registry = dr.async_get(hass)
+    domains: set[str] = set(chosen)
+    for entry in hass.config_entries.async_entries():
+        if entry.domain == DOMAIN or entry.domain in domains:
+            continue
+        for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
+            if any(
+                kind == dr.CONNECTION_NETWORK_MAC
+                for kind, _value in text_pairs(device.connections)
+            ):
+                domains.add(entry.domain)
+                break
+
+    def name(domain: str) -> str:
+        try:
+            return f"{async_get_loaded_integration(hass, domain).name} ({domain})"
+        except LoaderError:
+            return domain
+
+    # Chosen ones first, in their order, so the list reads as the priority.
+    rest = sorted(domains - set(chosen), key=lambda d: name(d).casefold())
+    return [
+        selector.SelectOptionDict(value=domain, label=name(domain))
+        for domain in [*chosen, *rest]
+    ]
+
+
+def _suggestion_schema(
+    settings, hass: HomeAssistant | None = None
+) -> dict[vol.Marker, object]:
     """Settings for suggestions and automatic linking, for every link."""
+    preferred = preferred_mac_sources(settings)
+    extra: dict[vol.Marker, object] = {}
+    if hass is not None:
+        extra[vol.Optional(CONF_PREFERRED_MAC_SOURCES, default=list(preferred))] = (
+            selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=_mac_source_options(hass, preferred),
+                    multiple=True,
+                    custom_value=True,
+                    sort=False,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+        )
     return {
+        **extra,
         vol.Optional(CONF_AUTO_LINK, default=settings.auto_link): (
             selector.BooleanSelector()
         ),
@@ -522,7 +611,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         {**dict(settings[CONF_ADDED_CONNECTIONS]), new.id: True},
                         str(settings[CONF_ORIGIN]),
                     ),
-                    link_title(_link_name(main, devices), len(devices)),
+                    link_title(_link_name(main, devices), len(devices) + bool(main)),
                     subentry.unique_id or link_unique_id(main_id, value),
                 )
                 return self.async_abort(reason="linked")
@@ -615,14 +704,21 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _add_link_to_hub(self.hass, hub, payload)
                 return self.async_abort(reason="linked")
 
+        ordered, preselect = _rank_macs(
+            self.hass,
+            discovered,
+            (device_a, device_b),
+            preferred_mac_sources(await async_load_settings(self.hass)),
+        )
         return self.async_show_form(
             step_id=f"discovery_{reason}",
             data_schema=vol.Schema(
                 {
                     **_mac_schema(
-                        discovered,
+                        ordered,
                         sources=_mac_sources(self.hass, device_a, device_b),
                         required=False,
+                        preselect=preselect,
                     ),
                     **_never_suggest_schema(device_a, device_b),
                 }
@@ -670,7 +766,7 @@ def _add_link_to_hub(
         link_payload(main_id, linked, mac, added, origin),
         link_title(
             _link_name(main, [get_device(registry, device_id) for device_id in linked]),
-            len(linked),
+            len(linked) + bool(main),
         ),
         unique_id,
     )
@@ -840,7 +936,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                             _link_name(
                                 main, [get_device(registry, d) for d in linked_ids]
                             ),
-                            len(linked_ids),
+                            len(linked_ids) + bool(main),
                         ),
                         subentry.unique_id or link_unique_id(main_id, value),
                     )
@@ -964,7 +1060,8 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 else:
                     return self.async_create_entry(
                         title=link_title(
-                            _link_name(main if main_id else None, linked), len(linked)
+                            _link_name(main if main_id else None, linked),
+                            len(linked) + bool(main_id),
                         ),
                         data=link_payload(
                             main_id,
@@ -979,10 +1076,20 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                         unique_id=unique_id,
                     )
 
+        ordered, preselect = _rank_macs(
+            self.hass,
+            _network_macs(main),
+            (main,),
+            preferred_mac_sources(await async_load_settings(self.hass)),
+        )
         return self.async_show_form(
             step_id="confirm",
             data_schema=vol.Schema(
-                _mac_schema(_network_macs(main), sources=_mac_sources(self.hass, main))
+                _mac_schema(
+                    ordered,
+                    sources=_mac_sources(self.hass, main),
+                    preselect=preselect,
+                )
             ),
             errors=errors,
             description_placeholders={
@@ -1089,7 +1196,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                         return self.async_update_and_abort(
                             entry,
                             subentry,
-                            title=link_title(_link_name(main, linked), len(linked_ids)),
+                            title=link_title(
+                                _link_name(main, linked), len(linked_ids) + bool(main)
+                            ),
                             unique_id=unique_id,
                             data=link_payload(
                                 main_id, linked_ids, mac, added, str(old[CONF_ORIGIN])
@@ -1102,14 +1211,24 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             if d in available
         ]
         sources: dict[str, list[str]] = {}
+        domains: dict[str, list[str]] = {}
         for device_id in current_ids:
             device = get_device(registry, device_id)
             if device is None:
                 continue
+            config = self.hass.config_entries.async_get_entry(device.config_entry_id)
+            domain = config.domain if config else "unknown"
             for mac in own_macs(device):
-                sources.setdefault(mac, []).append(_display_name(device))
+                sources.setdefault(mac, []).append(_device_label(device, domain, False))
+                domains.setdefault(mac, []).append(domain)
         if old_mac not in sources:
             sources[old_mac] = ["entered by hand"]
+        preferred = preferred_mac_sources(await async_load_settings(self.hass))
+
+        def mac_rank(mac: str) -> tuple[int, str]:
+            ranks = [integration_rank(d, preferred) for d in domains.get(mac, [])]
+            return (min(ranks, default=len(preferred)), mac)
+
         schema: dict[vol.Marker, object] = {
             vol.Required(CONF_LINKED_DEVICE_IDS, default=current_ids): (
                 _devices_selector(options)
@@ -1121,7 +1240,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                             selector.SelectOptionDict(
                                 value=mac, label=f"{mac} — {', '.join(names)}"
                             )
-                            for mac, names in sorted(sources.items())
+                            for mac, names in sorted(
+                                sources.items(), key=lambda item: mac_rank(item[0])
+                            )
                         ],
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
@@ -1204,7 +1325,7 @@ def _hidden_note(
         key=lambda pair: pair[0].casefold(),
     )
     parts = [
-        f"{name} (in {link})" if link else f"{name} (linked by Home Assistant)"
+        f"{name} — in {link}" if link else f"{name} — linked by Home Assistant"
         for name, link in named[:HIDDEN_NAMES]
     ]
     if len(named) > HIDDEN_NAMES:
@@ -1274,7 +1395,8 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(data={})
         settings = await async_load_settings(self.hass)
         return self.async_show_form(
-            step_id="settings", data_schema=vol.Schema(_suggestion_schema(settings))
+            step_id="settings",
+            data_schema=vol.Schema(_suggestion_schema(settings, self.hass)),
         )
 
     async def async_step_cleanup(

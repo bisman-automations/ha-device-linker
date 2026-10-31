@@ -34,6 +34,20 @@ CONF_AUTO_LINK_SIMILAR = "auto_link_similar"
 # Also link services: devices marked as services and every device of a
 # service integration (Music Assistant players). Off by default.
 CONF_INCLUDE_SERVICES = "include_services"
+# Integrations trusted to report a device's real MAC address, most trusted
+# first. Their address is preferred when a link has a choice.
+CONF_PREFERRED_MAC_SOURCES = "preferred_mac_sources"
+# Used until the setting is saved: network integrations that see devices by
+# their MAC address. Integrations that aren't installed are simply skipped.
+DEFAULT_PREFERRED_MAC_SOURCES = (
+    "unifi",
+    "tplink_omada",
+    "fritz",
+    "asuswrt",
+    "netgear",
+    "mikrotik",
+    "nmap_tracker",
+)
 # Devices never suggested or linked automatically (a settings list).
 CONF_IGNORED_DEVICES = "ignored_devices"
 # On a suggestion: don't link, and add these devices to that list.

@@ -19,7 +19,10 @@ from custom_components.device_linker.const import (
     DOMAIN,
     SUBENTRY_LINK,
 )
-from custom_components.device_linker.manager import async_get_manager
+from custom_components.device_linker.manager import (
+    async_apply_suggestion_preferences,
+    async_get_manager,
+)
 from custom_components.device_linker.registry import hub_entry
 from homeassistant.config_entries import SOURCE_RECONFIGURE, SOURCE_USER
 from homeassistant.helpers import device_registry as dr
@@ -109,7 +112,7 @@ async def test_add_link_links_several_devices_to_the_main_mac(hass) -> None:
         result["flow_id"], user_input={CONF_SELECTED_MAC_ADDRESS: MAC}
     )
     assert result["type"] == "create_entry"
-    assert result["title"] == "Link Main device to 2 devices"
+    assert result["title"] == "Main device (3 Devices Linked)"
     await hass.async_block_till_done()
 
     (link,) = links(hass)
@@ -151,8 +154,8 @@ async def test_add_link_links_several_devices_to_the_main_mac(hass) -> None:
     # The form names what it left out, and why.
     hidden = result["description_placeholders"]["hidden"]
     assert hidden.startswith("5 devices aren't listed because they're already linked:")
-    assert "Main device (in Link Main device to 2 devices)" in hidden
-    assert "Fourth device (linked by Home Assistant)" in hidden
+    assert "Main device — in Main device (3 Devices Linked)" in hidden
+    assert "Fourth device — linked by Home Assistant" in hidden
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
     )
@@ -234,7 +237,8 @@ async def test_legacy_multiselect_entry_becomes_an_editable_link(hass) -> None:
     assert hub.entry_id == entry.entry_id
     assert hub.title == "Device Linker"
     (link,) = links(hass)
-    assert link.title == "Legacy device group"
+    # Renamed to the current form after the move.
+    assert link.title == "Main device (2 Devices Linked)"
     assert link.settings[CONF_MAIN_DEVICE_ID] == main.id
     # That build didn't record which MAC it added, so none is owned.
     assert link.settings[CONF_ADDED_CONNECTIONS] == {target.id: False}
@@ -359,7 +363,7 @@ async def test_add_devices_to_an_existing_link(hass) -> None:
     assert link.settings[CONF_MAIN_DEVICE_ID] == main.id
     assert link.settings[CONF_LINKED_DEVICE_IDS] == [target.id, newcomer.id]
     assert link.settings[CONF_ADDED_CONNECTIONS][newcomer.id] is True
-    assert link.title == "Link Main device to 2 devices"
+    assert link.title == "Main device (3 Devices Linked)"
     assert (dr.CONNECTION_NETWORK_MAC, MAC) in dr.async_get(hass).async_get(
         newcomer.id
     ).connections
@@ -379,4 +383,36 @@ async def test_hidden_note_names_five_then_counts(hass) -> None:
     hidden = result["description_placeholders"]["hidden"]
     assert hidden.startswith("8 devices aren't listed")
     assert hidden.endswith("and 3 more.")
-    assert "Device 0A (linked by Home Assistant)" in hidden
+    assert "Device 0A — linked by Home Assistant" in hidden
+
+
+async def test_a_link_is_named_after_its_most_trusted_device(hass) -> None:
+    """The preferred MAC source names the link; a "(BLE)" tag is dropped."""
+    hub_device, client = _devices(
+        hass,
+        ("switchbot", "Den Hub (BLE)", "AA:BB:CC:DD:EE:70"),
+        ("unifi", "Den Hub Client", None),
+    )
+    hub = await _setup_hub(hass)
+    result = await _add_link(hass, hub)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: hub_device.id}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [client.id]}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_SELECTED_MAC_ADDRESS: "aa:bb:cc:dd:ee:70"}
+    )
+    await hass.async_block_till_done()
+    # UniFi is trusted first out of the box, so its device names the link.
+    (link,) = links(hass)
+    assert link.title == "Den Hub Client (2 Devices Linked)"
+
+    # Put SwitchBot first: the main device names it, without "(BLE)".
+    await async_apply_suggestion_preferences(
+        hass, {"preferred_mac_sources": ["switchbot"]}
+    )
+    await hass.async_block_till_done()
+    (link,) = links(hass)
+    assert link.title == "Den Hub (2 Devices Linked)"

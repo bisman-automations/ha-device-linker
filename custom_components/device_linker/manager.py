@@ -48,9 +48,11 @@ from .const import (
     CONF_MATCH_HARDWARE,
     CONF_MATCH_NAMES,
     CONF_ORIGIN,
+    CONF_PREFERRED_MAC_SOURCES,
     CONF_SUGGESTION_THRESHOLD,
     DATA_MANAGER,
     DEFAULT_AUTO_LINK_THRESHOLD,
+    DEFAULT_PREFERRED_MAC_SOURCES,
     DEFAULT_SUGGESTION_THRESHOLD,
     DOMAIN,
     ISSUE_AUTO_LINKED,
@@ -86,6 +88,7 @@ from .registry import (
     link_title,
     link_unique_id,
     linked_device_ids,
+    retitle_links,
     text_pairs,
 )
 
@@ -112,9 +115,18 @@ class SuggestionSettings:
     # Devices never suggested or linked automatically, until taken off the
     # list in the settings.
     ignored_devices: frozenset[str] = frozenset()
+    # Most trusted MAC sources first. None until saved: the defaults apply.
+    preferred_mac_sources: tuple[str, ...] | None = None
     dismissed: frozenset[str] = frozenset()
     unlinked: frozenset[str] = frozenset()
     announced: frozenset[str] = frozenset()
+
+
+def preferred_mac_sources(settings: SuggestionSettings) -> tuple[str, ...]:
+    """The saved preferred MAC sources, or the defaults until one is saved."""
+    if settings.preferred_mac_sources is None:
+        return DEFAULT_PREFERRED_MAC_SOURCES
+    return settings.preferred_mac_sources
 
 
 def async_get_manager(hass: HomeAssistant) -> SuggestionManager | None:
@@ -239,6 +251,7 @@ class SuggestionManager:
             match_hardware=self._settings.match_hardware,
             match_names=self._settings.match_names,
             copied_macs=_copied_macs(self.hass),
+            preferred_integrations=preferred_mac_sources(self._settings),
         )
         # A device already linked to another device isn't offered for a new
         # link. A device that isn't linked yet and matches one already in a
@@ -279,6 +292,7 @@ class SuggestionManager:
         auto_link_similar: bool | None = None,
         include_services: bool | None = None,
         ignored_devices: Iterable[str] | None = None,
+        preferred_sources: Iterable[str] | None = None,
         scan: bool = True,
     ) -> None:
         """Store new preferences and, by default, scan again."""
@@ -305,8 +319,15 @@ class SuggestionManager:
                 if ignored_devices is None
                 else frozenset(d for d in ignored_devices if isinstance(d, str) and d)
             ),
+            preferred_mac_sources=(
+                self._settings.preferred_mac_sources
+                if preferred_sources is None
+                else _ordered_unique(preferred_sources)
+            ),
         )
         await _save_settings(self._store, self._settings)
+        # The preferred MAC sources decide which device names each link.
+        retitle_links(self.hass, preferred_mac_sources(self._settings))
         hub = hub_entry(self.hass)
         if services_were_included and not self._settings.include_services and hub:
             # Take services back out of automatic links now, not at the next start.
@@ -584,7 +605,7 @@ class SuggestionManager:
             hub,
             existing[0] if existing is not None else None,
             payload,
-            link_title(anchor_name, len(chosen)),
+            link_title(anchor_name, len(chosen) + 1),
             unique_id,
         )
         keys = {pair_key(plan.anchor_device_id, device_id) for device_id in fresh}
@@ -1044,6 +1065,11 @@ async def async_apply_suggestion_preferences(
         for d in user_input.get(CONF_IGNORED_DEVICES, current.ignored_devices) or []
         if isinstance(d, str) and d
     )
+    preferred_sources = (
+        _ordered_unique(user_input[CONF_PREFERRED_MAC_SOURCES])
+        if CONF_PREFERRED_MAC_SOURCES in user_input
+        else current.preferred_mac_sources
+    )
     if manager is not None:
         await manager.async_update_settings(
             threshold=threshold,
@@ -1054,6 +1080,7 @@ async def async_apply_suggestion_preferences(
             auto_link_similar=auto_link_similar,
             include_services=include_services,
             ignored_devices=ignored_devices,
+            preferred_sources=preferred_sources,
             scan=scan,
         )
         return
@@ -1070,8 +1097,15 @@ async def async_apply_suggestion_preferences(
             auto_link_similar=auto_link_similar,
             include_services=include_services,
             ignored_devices=ignored_devices,
+            preferred_mac_sources=preferred_sources,
         ),
     )
+
+
+def _ordered_unique(values: Iterable[str] | None) -> tuple[str, ...]:
+    """Integration domains in the order given, each once."""
+    cleaned = (str(v).strip().lower() for v in values or [] if str(v).strip())
+    return tuple(dict.fromkeys(cleaned))
 
 
 async def async_remember_unlinked(hass: HomeAssistant, pairs: set[str]) -> None:
@@ -1133,6 +1167,11 @@ async def _load_settings(store: Store[dict[str, Any]]) -> SuggestionSettings:
         auto_link_similar=bool(stored.get("auto_link_similar", True)),
         include_services=bool(stored.get("include_services", False)),
         ignored_devices=_string_set(stored, "ignored_devices"),
+        preferred_mac_sources=(
+            tuple(v for v in stored["preferred_mac_sources"] if isinstance(v, str))
+            if isinstance(stored.get("preferred_mac_sources"), list)
+            else None
+        ),
         dismissed=_string_set(stored, "dismissed"),
         unlinked=_string_set(stored, "unlinked"),
         announced=_string_set(stored, "announced"),
@@ -1152,6 +1191,11 @@ async def _save_settings(
             "auto_link_similar": settings.auto_link_similar,
             "include_services": settings.include_services,
             "ignored_devices": sorted(settings.ignored_devices),
+            "preferred_mac_sources": (
+                None
+                if settings.preferred_mac_sources is None
+                else list(settings.preferred_mac_sources)
+            ),
             "dismissed": sorted(settings.dismissed),
             "unlinked": sorted(settings.unlinked),
             "announced": sorted(settings.announced),
