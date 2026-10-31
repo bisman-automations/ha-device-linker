@@ -15,6 +15,7 @@ covers integrations that register during startup and then go quiet.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import logging
@@ -39,6 +40,7 @@ from .const import (
     CONF_AUTO_LINK,
     CONF_AUTO_LINK_SIMILAR,
     CONF_AUTO_LINK_THRESHOLD,
+    CONF_IGNORED_DEVICES,
     CONF_INCLUDE_SERVICES,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
@@ -107,6 +109,9 @@ class SuggestionSettings:
     auto_link_threshold: float = DEFAULT_AUTO_LINK_THRESHOLD
     auto_link_similar: bool = True
     include_services: bool = False
+    # Devices never suggested or linked automatically, until taken off the
+    # list in the settings.
+    ignored_devices: frozenset[str] = frozenset()
     dismissed: frozenset[str] = frozenset()
     unlinked: frozenset[str] = frozenset()
     announced: frozenset[str] = frozenset()
@@ -220,10 +225,14 @@ class SuggestionManager:
     async def _async_scan_once(self) -> None:
         blocked = set(self._settings.dismissed) | set(self._settings.unlinked)
         matches = suggest(
-            _device_views(
-                self.hass,
-                include_services=(self._settings.include_services),
-            ),
+            [
+                view
+                for view in _device_views(
+                    self.hass,
+                    include_services=(self._settings.include_services),
+                )
+                if view.device_id not in self._settings.ignored_devices
+            ],
             linked_pairs=_linked_pairs(self.hass),
             dismissed=blocked,
             threshold=self._settings.threshold,
@@ -269,6 +278,7 @@ class SuggestionManager:
         auto_link_threshold: float,
         auto_link_similar: bool | None = None,
         include_services: bool | None = None,
+        ignored_devices: Iterable[str] | None = None,
         scan: bool = True,
     ) -> None:
         """Store new preferences and, by default, scan again."""
@@ -289,6 +299,11 @@ class SuggestionManager:
                 self._settings.include_services
                 if include_services is None
                 else bool(include_services)
+            ),
+            ignored_devices=(
+                self._settings.ignored_devices
+                if ignored_devices is None
+                else frozenset(d for d in ignored_devices if isinstance(d, str) and d)
             ),
         )
         await _save_settings(self._store, self._settings)
@@ -332,6 +347,18 @@ class SuggestionManager:
             if suggestion_unique_id(item.device_id_a, item.device_id_b) != unique_id
         ]
         self._publish_sensor()
+
+    async def async_ignore_devices(self, device_ids: Iterable[str]) -> None:
+        """Never suggest these devices again, then look again without them."""
+        fresh = {d for d in device_ids if d} - self._settings.ignored_devices
+        if not fresh:
+            return
+        self._settings = replace(
+            self._settings,
+            ignored_devices=self._settings.ignored_devices | fresh,
+        )
+        await _save_settings(self._store, self._settings)
+        await self.async_scan()
 
     def is_dismissed(self, unique_id: str) -> bool:
         """Return whether this suggestion unique id was ignored."""
@@ -1012,6 +1039,11 @@ async def async_apply_suggestion_preferences(
     include_services = bool(
         user_input.get(CONF_INCLUDE_SERVICES, current.include_services)
     )
+    ignored_devices = frozenset(
+        d
+        for d in user_input.get(CONF_IGNORED_DEVICES, current.ignored_devices) or []
+        if isinstance(d, str) and d
+    )
     if manager is not None:
         await manager.async_update_settings(
             threshold=threshold,
@@ -1021,6 +1053,7 @@ async def async_apply_suggestion_preferences(
             auto_link_threshold=auto_link_threshold,
             auto_link_similar=auto_link_similar,
             include_services=include_services,
+            ignored_devices=ignored_devices,
             scan=scan,
         )
         return
@@ -1036,6 +1069,7 @@ async def async_apply_suggestion_preferences(
             auto_link_threshold=auto_link_threshold,
             auto_link_similar=auto_link_similar,
             include_services=include_services,
+            ignored_devices=ignored_devices,
         ),
     )
 
@@ -1098,6 +1132,7 @@ async def _load_settings(store: Store[dict[str, Any]]) -> SuggestionSettings:
         ),
         auto_link_similar=bool(stored.get("auto_link_similar", True)),
         include_services=bool(stored.get("include_services", False)),
+        ignored_devices=_string_set(stored, "ignored_devices"),
         dismissed=_string_set(stored, "dismissed"),
         unlinked=_string_set(stored, "unlinked"),
         announced=_string_set(stored, "announced"),
@@ -1116,6 +1151,7 @@ async def _save_settings(
             "auto_link_threshold": settings.auto_link_threshold,
             "auto_link_similar": settings.auto_link_similar,
             "include_services": settings.include_services,
+            "ignored_devices": sorted(settings.ignored_devices),
             "dismissed": sorted(settings.dismissed),
             "unlinked": sorted(settings.unlinked),
             "announced": sorted(settings.announced),

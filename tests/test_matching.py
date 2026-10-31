@@ -856,3 +856,26 @@ def test_a_connection_word_alone_is_not_a_match() -> None:
         "Family Room",
     )
     assert score == 1.0
+
+
+def test_a_real_leftover_word_is_not_a_full_match() -> None:
+    """ "Kitchen Hub" in the Kitchen is "hub"; "Family Hub" says which hub."""
+    score, _ = matching._name_score("Family Hub", "Kitchen Hub", "Kitchen")
+    assert score < 0.8
+    # A model code left over still counts: the same camera.
+    score, _ = matching._name_score("Deck", "G4 Deck", None)
+    assert score == 1.0
+
+
+def test_two_different_brands_are_not_a_name_match() -> None:
+    """An Apple TV and a TV with Google Cast are different devices."""
+    for area in ("Family Room", None):
+        score, _ = matching._name_score(
+            "Family Room TV (Google Cast)", "Family Room Apple TV", area
+        )
+        assert score == 0.0
+    # The same brand on both, or a brand on only one, can still match.
+    score, _ = matching._name_score("Apple TV Den", "Den Apple TV", "Den")
+    assert score == 1.0
+    score, _ = matching._name_score("Sonos Kitchen Speaker", "Kitchen Speaker", None)
+    assert score >= 0.8

@@ -9,14 +9,23 @@
       "discovery_join": {
         "title": "Add {device} to {link}?",
         "description": "{device} ({integration}) matches {member}, which is already in the link {link}. {why} Submit adds {device} to that link, so Home Assistant shows it with the other devices in it.",
-        "data": {}
+        "data": {
+          "never_suggest": "Don't link: never suggest these devices again"
+        },
+        "data_description": {
+          "never_suggest": "Tick a device to skip this suggestion and stop suggesting that device. You can take it off the list in Device Linker's Matching settings."
+        }
       },
       "discovery_mac": {
         "title": "Link {device_a} with {device_b}?",
         "description": "These devices share a MAC address, so this is a strong match even when they are in different areas. {device_a} ({integration_a}) is in {area_a}. {device_b} ({integration_b}) is in {area_b}.",
         "data": {
           "selected_mac_address": "MAC address",
-          "mac_address": "Or type a MAC address or shared ID"
+          "mac_address": "Or type a MAC address or shared ID",
+          "never_suggest": "Don't link: never suggest these devices again"
+        },
+        "data_description": {
+          "never_suggest": "Tick a device to skip this suggestion and stop suggesting that device. You can take it off the list in Device Linker's Matching settings."
         }
       },
       "discovery_identifier": {
@@ -24,7 +33,11 @@
         "description": "These devices share a hardware identifier, such as a Zigbee address, Bluetooth MAC, or serial number. {device_a} ({integration_a}) is in {area_a}. {device_b} ({integration_b}) is in {area_b}.",
         "data": {
           "selected_mac_address": "MAC address",
-          "mac_address": "Or type a MAC address or shared ID"
+          "mac_address": "Or type a MAC address or shared ID",
+          "never_suggest": "Don't link: never suggest these devices again"
+        },
+        "data_description": {
+          "never_suggest": "Tick a device to skip this suggestion and stop suggesting that device. You can take it off the list in Device Linker's Matching settings."
         }
       },
       "discovery_name": {
@@ -32,7 +45,11 @@
         "description": "These names are similar ({score}). A device with no area is still included, so an unassigned UniFi client can match a device in a room. Different areas are not matched. {device_a} ({integration_a}) is in {area_a}. {device_b} ({integration_b}) is in {area_b}.",
         "data": {
           "selected_mac_address": "MAC address",
-          "mac_address": "Or type a MAC address or shared ID"
+          "mac_address": "Or type a MAC address or shared ID",
+          "never_suggest": "Don't link: never suggest these devices again"
+        },
+        "data_description": {
+          "never_suggest": "Tick a device to skip this suggestion and stop suggesting that device. You can take it off the list in Device Linker's Matching settings."
         }
       }
     },
@@ -47,7 +64,8 @@
       "already_linked": "A device in this suggestion is already linked to another device, so this suggestion no longer applies.",
       "linked": "Linked. The link is under Device Linker, where you can edit or delete it.",
       "same_integration": "That link already has a device from the same integration, and two devices of one integration can't share its MAC address or ID.",
-      "ignored": "This link suggestion was ignored and will not be offered again."
+      "ignored": "This link suggestion was ignored and will not be offered again.",
+      "devices_ignored": "Not linked. {names} won't be suggested again. To change that, open Configure on Device Linker, choose Matching settings, and take it off Devices never suggested."
     }
   },
   "options": {
@@ -69,13 +87,15 @@
           "suggestion_threshold": "Name similarity for suggestions",
           "match_hardware": "Match MAC addresses and hardware identifiers",
           "match_names": "Match similar names",
-          "include_services": "Include services"
+          "include_services": "Include services",
+          "ignored_devices": "Devices never suggested"
         },
         "data_description": {
           "auto_link_similar": "Links names like Deck Camera and G4 Deck Camera without asking. Names that differ by a brand or a place, like Living Room TV and Living Room Apple TV, still ask first.",
           "auto_link_threshold": "How alike two names must be to link them without asking.",
           "suggestion_threshold": "How alike two names must be to show them as discovered.",
-          "include_services": "Off: services are left out, such as Daily Routine routines and Music Assistant players, which are software rather than hardware. On: they can be suggested, linked automatically and chosen in Add link like any other device."
+          "include_services": "Off: services are left out, such as Daily Routine routines and Music Assistant players, which are software rather than hardware. On: they can be suggested, linked automatically and chosen in Add link like any other device.",
+          "ignored_devices": "These devices are never suggested or linked automatically. Remove a device to have it suggested again. You can still link it yourself with Add link."
         }
       },
       "cleanup": {
@@ -88,8 +108,9 @@
     },
     "abort": {
       "no_leftovers": "No leftover addresses found. Every MAC address and shared ID Device Linker added is used by a current link.",
+      "cleanup_failed": "Something went wrong while cleaning up. Nothing more was changed. The details are in Settings > System > Logs, under Device Linker.",
       "cleaned": "Removed {removed}. Home Assistant no longer shows those devices as linked through them.",
-      "cleaned_some": "Removed {removed}. Home Assistant wouldn't change {failed}, so their addresses were left as they are."
+      "cleaned_some": "Removed {removed}. Home Assistant wouldn't change {failed}, so their addresses were left as they are. The reason is in Settings > System > Logs."
     }
   },
   "entity": {

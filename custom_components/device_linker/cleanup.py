@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -34,6 +35,8 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_LINKED_DEVICE_IDS, CONF_MAC_ADDRESS, CONF_MAIN_DEVICE_ID, DOMAIN
 from .registry import hub_links, is_service, link_item, text_pairs
+
+_LOGGER = logging.getLogger(__name__)
 
 # Separates the device id and the value in a form option's value.
 SEPARATOR = "|"
@@ -168,8 +171,15 @@ def remove_leftovers(hass: HomeAssistant, keys: Iterable[str]) -> tuple[int, lis
             registry.async_update_device(
                 device.id, **{f"new_{field}": current - {item}}
             )
-        except HomeAssistantError:
+        except HomeAssistantError as err:
+            _LOGGER.warning(
+                "Couldn't remove %s from %s: Home Assistant refused the change (%s)",
+                value,
+                _name(device),
+                err,
+            )
             failed.append(_name(device))
             continue
+        _LOGGER.info("Removed leftover %s from %s", value, _name(device))
         removed += 1
     return removed, failed

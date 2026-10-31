@@ -34,6 +34,10 @@ CONF_AUTO_LINK_SIMILAR = "auto_link_similar"
 # Also link services: devices marked as services and every device of a
 # service integration (Music Assistant players). Off by default.
 CONF_INCLUDE_SERVICES = "include_services"
+# Devices never suggested or linked automatically (a settings list).
+CONF_IGNORED_DEVICES = "ignored_devices"
+# On a suggestion: don't link, and add these devices to that list.
+CONF_NEVER_SUGGEST = "never_suggest"
 CONF_ORIGIN = "origin"
 ORIGIN_MANUAL = "manual"
 ORIGIN_AUTO = "auto"

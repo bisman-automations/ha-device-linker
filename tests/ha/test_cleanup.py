@@ -152,7 +152,7 @@ async def test_a_devices_only_address_and_service_links_are_not_offered(hass) ->
     assert result["reason"] == "no_leftovers"
 
 
-async def test_one_refusal_does_not_stop_the_rest(hass) -> None:
+async def test_one_refusal_does_not_stop_the_rest(hass, caplog) -> None:
     """A device Home Assistant won't change is named; the others still go."""
     hub = await _setup_hub(hass)
     unifi = _device(hass, "unifi", "Leak Sensor", mac=MAC)
@@ -172,6 +172,8 @@ async def test_one_refusal_does_not_stop_the_rest(hass) -> None:
             result["flow_id"], user_input={"leftovers": chosen}
         )
     assert result["reason"] == "cleaned_some"
+    assert "Couldn't remove" in caplog.text
+    assert "Home Assistant refused the change (refused)" in caplog.text
     assert result["description_placeholders"] == {
         "removed": "1",
         "failed": "Leak Sensor",
@@ -179,3 +181,23 @@ async def test_one_refusal_does_not_stop_the_rest(hass) -> None:
     assert (dr.CONNECTION_NETWORK_MAC, MAC) not in dr.async_get(hass).async_get(
         matter.id
     ).connections
+
+
+async def test_an_unexpected_error_is_logged_and_explained(hass, caplog) -> None:
+    """Not "Unknown error": a message that points to the log, and the traceback."""
+    hub = await _setup_hub(hass)
+    unifi = _device(hass, "unifi", "Leak Sensor", mac=MAC)
+    matter = _device(hass, "matter", "Leak Sensor (matter)", mac=MAC)
+    await async_remember_unlinked(hass, {pair_key(unifi.id, matter.id)})
+    result = await _open_cleanup(hass, hub)
+    with patch(
+        "custom_components.device_linker.config_flow.remove_leftovers",
+        side_effect=RuntimeError("boom"),
+    ):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], user_input={"leftovers": [f"{matter.id}|{MAC}"]}
+        )
+    assert result["type"] == "abort"
+    assert result["reason"] == "cleanup_failed"
+    assert "Removing leftover addresses failed" in caplog.text
+    assert "RuntimeError: boom" in caplog.text

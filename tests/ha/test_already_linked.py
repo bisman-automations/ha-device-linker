@@ -182,3 +182,46 @@ async def test_no_join_from_an_integration_already_in_the_link(hass) -> None:
     assert not any(
         item.join_device_id == second.id for item in async_get_manager(hass).suggestions
     )
+
+
+async def test_never_suggest_a_device_and_take_it_back(hass) -> None:
+    """Decline a suggestion for good, then undo it from the settings."""
+    hub = await _setup_hub(hass)
+    await _disable_auto_link(hass)
+    lamp = _register(hass, domain="shelly", name="Desk Lamp", area="Office")
+    plug = _register(hass, domain="tplink", name="Desk Lamp", area="Office")
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+    flow = next(
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"].get("unique_id") == suggestion_unique_id(lamp.id, plug.id)
+    )
+    # No address needed to decline.
+    result = await hass.config_entries.flow.async_configure(
+        flow["flow_id"], user_input={"never_suggest": [plug.id]}
+    )
+    assert result["reason"] == "devices_ignored"
+    assert result["description_placeholders"] == {"names": "Desk Lamp"}
+    await hass.async_block_till_done()
+    manager = async_get_manager(hass)
+    assert manager.settings.ignored_devices == {plug.id}
+    assert manager.suggestions == []
+    assert links(hass) == []
+
+    # The settings list shows it; removing it suggests the pair again.
+    result = await hass.config_entries.options.async_init(hub.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"next_step_id": "settings"}
+    )
+    defaults = result["data_schema"]({})
+    assert defaults["ignored_devices"] == [plug.id]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={**defaults, "ignored_devices": []}
+    )
+    await hass.async_block_till_done()
+    assert manager.settings.ignored_devices == frozenset()
+    assert any(
+        {item.device_id_a, item.device_id_b} == {lamp.id, plug.id}
+        for item in manager.suggestions
+    )

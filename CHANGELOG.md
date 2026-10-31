@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] - 2026-10-30
+
+### Added
+
+- **Never suggest a device again.** Every suggestion now has a choice to skip it and stop suggesting one or both devices. No address is needed to decline. Those devices go on a new **Devices never suggested** list in **Matching settings**, where you can add devices or take them off to have them suggested again. You can still link them yourself with **Add link**.
+
+### Fixed
+
+- **Different brands were suggested together.** "Family Room TV (Google Cast)" was offered with "Family Room Apple TV". When each name has a brand and the brands differ, the names are no longer a match. A brand on only one of the names can still match.
+- **"Family Hub" was suggested with "Kitchen Hub".** When a name shared only one word with another, any extra word was ignored, so "Kitchen Hub" in the Kitchen ("hub") matched "Family Hub" at 100%. An extra word now counts unless it's filler like a model code ("Deck" and "G4 Deck" still match), or the names share two or more words.
+- **Cleanup problems show in the log.** When Home Assistant refuses to remove an address, Settings > System > Logs now says which address, which device, and why. If cleaning up fails for any other reason, it stops with a message pointing to the log instead of "Unknown error", and the full details are logged under Device Linker.
+
 ## [2.7.1] - 2026-10-30
 
 ### Fixed
@@ -182,6 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.8.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.7.1...v2.8.0
 [2.7.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.5.1...v2.6.0

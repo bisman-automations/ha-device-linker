@@ -413,6 +413,12 @@ def _name_score(name_a: str, name_b: str, area_name: str | None) -> tuple[float,
     folded_b = fold_name(name_b)
     if folded_a and folded_a == folded_b:
         return 1.0, True
+    # Two different brands are two different devices: "Apple TV" and
+    # "TV (Google Cast)". One name with a brand and one without can still match.
+    brands_a = set(folded_a.split()) & _BRAND_TOKENS
+    brands_b = set(folded_b.split()) & _BRAND_TOKENS
+    if brands_a and brands_b and not brands_a & brands_b:
+        return 0.0, False
     left = normalize_name(name_a, area_name)
     right = normalize_name(name_b, area_name)
     if not left or not right:
@@ -994,11 +1000,18 @@ def _token_set_ratio(left: str, right: str) -> float:
     only_right = " ".join(sorted(tokens_right - tokens_left))
     joined_left = f"{shared} {only_left}".strip()
     joined_right = f"{shared} {only_right}".strip()
-    return max(
-        _ratio(shared, joined_left),
-        _ratio(shared, joined_right),
-        _ratio(joined_left, joined_right),
-    )
+    scores = [_ratio(joined_left, joined_right)]
+    # One name inside the other counts as a full match when they share two
+    # or more words ("Red bicycle" and "Red bicycle stand"), or when the
+    # words left over are filler (a model code like "G4"). One shared word
+    # with a real word left over is not: "Hub" inside "Family Hub", where
+    # "Family" says which hub. Left inside right: right's extras decide.
+    several = len(tokens_left & tokens_right) >= 2
+    if several or all(_filler_word(token) for token in tokens_left - tokens_right):
+        scores.append(_ratio(shared, joined_right))
+    if several or all(_filler_word(token) for token in tokens_right - tokens_left):
+        scores.append(_ratio(shared, joined_left))
+    return max(scores)
 
 
 def _pair_allowed(

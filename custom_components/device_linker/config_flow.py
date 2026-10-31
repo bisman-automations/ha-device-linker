@@ -9,6 +9,7 @@ the hub holds the settings for suggestions and automatic linking.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import voluptuous as vol
@@ -30,12 +31,14 @@ from .const import (
     CONF_AUTO_LINK_SIMILAR,
     CONF_AUTO_LINK_THRESHOLD,
     CONF_HUB,
+    CONF_IGNORED_DEVICES,
     CONF_INCLUDE_SERVICES,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
     CONF_MAIN_DEVICE_ID,
     CONF_MATCH_HARDWARE,
     CONF_MATCH_NAMES,
+    CONF_NEVER_SUGGEST,
     CONF_ORIGIN,
     CONF_SELECTED_MAC_ADDRESS,
     CONF_SUGGESTION_THRESHOLD,
@@ -80,6 +83,8 @@ from .registry import (
     normalize_link_value,
     text_pairs,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 MANUAL_ENTRY = "__manual_entry__"
 # Add link: add devices to a link that already exists.
@@ -217,6 +222,8 @@ def _mac_schema(
     discovered: list[str],
     current: str | None = None,
     sources: dict[str, str] | None = None,
+    *,
+    required: bool = True,
 ) -> dict:
     """MAC fields: discovered choices plus a manual override.
 
@@ -249,9 +256,29 @@ def _mac_schema(
         schema[vol.Optional(CONF_MAC_ADDRESS)] = str
     elif current:
         schema[vol.Required(CONF_MAC_ADDRESS, default=current)] = str
-    else:
+    elif required:
         schema[vol.Required(CONF_MAC_ADDRESS)] = str
+    else:
+        # A suggestion can be declined with "never suggest" and no address.
+        schema[vol.Optional(CONF_MAC_ADDRESS)] = str
     return schema
+
+
+def _never_suggest_schema(*devices) -> dict:
+    """On a suggestion: instead of linking, never suggest these devices."""
+    return {
+        vol.Optional(CONF_NEVER_SUGGEST, default=[]): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[
+                    selector.SelectOptionDict(value=d.id, label=_display_name(d))
+                    for d in devices
+                    if d is not None
+                ],
+                multiple=True,
+                mode=selector.SelectSelectorMode.LIST,
+            )
+        )
+    }
 
 
 def _network_macs(*devices) -> list[str]:
@@ -325,6 +352,9 @@ def _suggestion_schema(settings) -> dict[vol.Marker, object]:
         vol.Optional(CONF_MATCH_NAMES, default=settings.match_names): (
             selector.BooleanSelector()
         ),
+        vol.Optional(
+            CONF_IGNORED_DEVICES, default=sorted(settings.ignored_devices)
+        ): selector.DeviceSelector(selector.DeviceSelectorConfig(multiple=True)),
     }
 
 
@@ -403,6 +433,22 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_discovery_identifier()
         return await self.async_step_discovery_name()
 
+    async def _async_never_suggest(
+        self, chosen: list[str], devices: tuple
+    ) -> ConfigFlowResult:
+        """Add the chosen devices to the never-suggest list, without linking."""
+        allowed = {d.id: d for d in devices if d is not None}
+        ids = [d for d in chosen if d in allowed]
+        manager = async_get_manager(self.hass)
+        if manager is not None and ids:
+            await manager.async_ignore_devices(ids)
+        return self.async_abort(
+            reason="devices_ignored",
+            description_placeholders={
+                "names": ", ".join(_display_name(allowed[d]) for d in ids)
+            },
+        )
+
     async def async_step_discovery_join(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -452,6 +498,10 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             "why": _match_reason(discovery),
             "conflicting_devices": "",
         }
+        if user_input is not None and user_input.get(CONF_NEVER_SUGGEST):
+            return await self._async_never_suggest(
+                user_input[CONF_NEVER_SUGGEST], (new, member)
+            )
         if user_input is not None:
             conflicts = _connection_conflicts(self.hass, [new], value)
             if _check_devices(registry, main, [*linked_ids, new.id]):
@@ -478,7 +528,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_abort(reason="linked")
         return self.async_show_form(
             step_id="discovery_join",
-            data_schema=vol.Schema({}),
+            data_schema=vol.Schema(_never_suggest_schema(new)),
             errors=errors,
             description_placeholders=placeholders,
         )
@@ -534,6 +584,10 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if discovery.get("mac"):
             discovered = sorted({*discovered, dr.format_mac(discovery["mac"])})
         errors: dict[str, str] = {}
+        if user_input is not None and user_input.get(CONF_NEVER_SUGGEST):
+            return await self._async_never_suggest(
+                user_input[CONF_NEVER_SUGGEST], (device_a, device_b)
+            )
         if user_input is not None:
             mac = _submitted_mac(user_input)
             if not mac:
@@ -564,9 +618,14 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id=f"discovery_{reason}",
             data_schema=vol.Schema(
-                _mac_schema(
-                    discovered, sources=_mac_sources(self.hass, device_a, device_b)
-                )
+                {
+                    **_mac_schema(
+                        discovered,
+                        sources=_mac_sources(self.hass, device_a, device_b),
+                        required=False,
+                    ),
+                    **_never_suggest_schema(device_a, device_b),
+                }
             ),
             errors=errors,
             description_placeholders={
@@ -1223,12 +1282,21 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlow):
     ) -> ConfigFlowResult:
         """List addresses left behind by removed links, and remove the chosen ones."""
         settings = await async_load_settings(self.hass)
-        leftovers = find_leftovers(self.hass, self.config_entry, settings.unlinked)
+        try:
+            leftovers = find_leftovers(self.hass, self.config_entry, settings.unlinked)
+        except Exception:
+            # Logged with the traceback, so it shows in Settings > System > Logs.
+            _LOGGER.exception("Looking for leftover addresses failed")
+            return self.async_abort(reason="cleanup_failed")
         if user_input is not None:
             chosen = set(user_input.get(CONF_LEFTOVERS) or [])
-            removed, failed = remove_leftovers(
-                self.hass, [item.key for item in leftovers if item.key in chosen]
-            )
+            try:
+                removed, failed = remove_leftovers(
+                    self.hass, [item.key for item in leftovers if item.key in chosen]
+                )
+            except Exception:
+                _LOGGER.exception("Removing leftover addresses failed")
+                return self.async_abort(reason="cleanup_failed")
             if failed:
                 return self.async_abort(
                     reason="cleaned_some",
