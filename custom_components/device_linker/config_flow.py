@@ -58,6 +58,8 @@ from .manager import (
     async_load_settings,
     find_link,
     link_payload,
+    may_join,
+    may_link,
     plan_entry_data,
     save_link,
 )
@@ -72,6 +74,7 @@ from .registry import (
     link_settings,
     link_title,
     link_unique_id,
+    linked_device_ids,
     normalize_link_value,
     text_pairs,
 )
@@ -129,17 +132,25 @@ def _device_options(
     exclude_config_entry_id: str | None = None,
     include_mac: bool = False,
     include_services: bool = False,
+    exclude_device_ids: set[str] | None = None,
 ) -> list[selector.SelectOptionDict]:
-    """Devices of other integrations, labelled with the integration."""
+    """Devices of other integrations, labelled with the integration.
+
+    ``exclude_device_ids`` leaves out devices that are already linked.
+    """
     registry = dr.async_get(hass)
     options = []
     for entry in hass.config_entries.async_entries():
         if entry.domain == DOMAIN:
             continue
         for device in dr.async_entries_for_config_entry(registry, entry.entry_id):
-            if device.id == exclude_device_id or (
-                exclude_config_entry_id is not None
-                and device.config_entry_id == exclude_config_entry_id
+            if (
+                device.id == exclude_device_id
+                or device.id in (exclude_device_ids or ())
+                or (
+                    exclude_config_entry_id is not None
+                    and device.config_entry_id == exclude_config_entry_id
+                )
             ):
                 continue
             if get_device(registry, device.id) is None or is_service(
@@ -324,7 +335,18 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         manager = async_get_manager(self.hass)
         if manager is not None and manager.is_dismissed(discovery_info["unique_id"]):
             return self.async_abort(reason="ignored")
+        if discovery_info.get("join_link_id"):
+            new_name = (
+                discovery_info["name_b"]
+                if discovery_info.get("join_device_id") == discovery_info["device_id_b"]
+                else discovery_info["name_a"]
+            )
+            self.context["title_placeholders"] = {
+                "name": f"Add {new_name} to {discovery_info['join_link_title']}"
+            }
+            return await self.async_step_discovery_join()
         self.context["title_placeholders"] = {
+            "name": f"{discovery_info['name_a']} and {discovery_info['name_b']}",
             "device_a": discovery_info["name_a"],
             "device_b": discovery_info["name_b"],
         }
@@ -334,6 +356,85 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if reason == REASON_IDENTIFIER:
             return await self.async_step_discovery_identifier()
         return await self.async_step_discovery_name()
+
+    async def async_step_discovery_join(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Add a device to the link that a matching device is already in."""
+        hub = hub_entry(self.hass)
+        if hub is None:
+            return self.async_abort(reason="not_set_up")
+        discovery = self._discovery or {}
+        link_id = discovery.get("join_link_id", "")
+        subentry = hub.subentries.get(link_id)
+        registry = dr.async_get(self.hass)
+        new_id = discovery.get("join_device_id", "")
+        new = get_device(registry, new_id)
+        member_id = (
+            discovery.get("device_id_a")
+            if new_id == discovery.get("device_id_b")
+            else discovery.get("device_id_b")
+        )
+        member = get_device(registry, member_id or "")
+        if subentry is None or new is None or member is None:
+            return self.async_abort(reason="device_not_found")
+        settings = link_settings(subentry.data)
+        main_id = settings[CONF_MAIN_DEVICE_ID]
+        main_id = main_id if isinstance(main_id, str) else None
+        linked_ids = [
+            d for d in settings[CONF_LINKED_DEVICE_IDS] or [] if isinstance(d, str)
+        ]
+        if member.id not in {main_id, *linked_ids} or not may_join(
+            self.hass, link_id, new.id
+        ):
+            return self.async_abort(reason="already_linked")
+        value = str(settings[CONF_MAC_ADDRESS])
+        main = get_device(registry, main_id) if main_id else None
+        errors: dict[str, str] = {}
+        placeholders = {
+            "device": _display_name(new),
+            "integration": str(
+                discovery.get(
+                    "integration_b"
+                    if new.id == discovery.get("device_id_b")
+                    else "integration_a",
+                    "",
+                )
+            ),
+            "member": _display_name(member),
+            "link": subentry.title,
+            "conflicting_devices": "",
+        }
+        if user_input is not None:
+            conflicts = _connection_conflicts(self.hass, [new], value)
+            if _check_devices(registry, main, [*linked_ids, new.id]):
+                return self.async_abort(reason="same_integration")
+            if conflicts:
+                errors["base"] = "connection_conflict"
+                placeholders["conflicting_devices"] = ", ".join(conflicts)
+            else:
+                devices = [get_device(registry, d) for d in [*linked_ids, new.id]]
+                save_link(
+                    self.hass,
+                    hub,
+                    subentry,
+                    link_payload(
+                        main_id,
+                        [*linked_ids, new.id],
+                        value,
+                        {**dict(settings[CONF_ADDED_CONNECTIONS]), new.id: True},
+                        str(settings[CONF_ORIGIN]),
+                    ),
+                    link_title(_link_name(main, devices), len(devices)),
+                    subentry.unique_id or link_unique_id(main_id, value),
+                )
+                return self.async_abort(reason="linked")
+        return self.async_show_form(
+            step_id="discovery_join",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders=placeholders,
+        )
 
     async def async_step_discovery_mac(self, user_input: dict[str, Any] | None = None):
         """Confirm a MAC-address match."""
@@ -371,6 +472,16 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         device_b = get_device(registry, discovery.get("device_id_b", ""))
         if device_a is None or device_b is None:
             return self.async_abort(reason="device_not_found")
+        # Another link may have taken one of them since this was suggested.
+        if not may_link(
+            self.hass,
+            device_a.id,
+            device_b.id,
+            discovery.get("anchor_device_id") or None,
+            discovery.get("mac") or None,
+            linked_device_ids(self.hass),
+        ):
+            return self.async_abort(reason="already_linked")
 
         discovered = _network_macs(device_a, device_b)
         if discovery.get("mac"):
@@ -485,6 +596,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             *_device_options(
                 self.hass,
                 include_mac=True,
+                exclude_device_ids=linked_device_ids(self.hass),
                 include_services=(
                     await async_load_settings(self.hass)
                 ).include_services,
@@ -543,6 +655,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             include_services=(await async_load_settings(self.hass)).include_services,
             exclude_device_id=self._main_device_id,
             exclude_config_entry_id=main.config_entry_id if main else None,
+            exclude_device_ids=linked_device_ids(self.hass),
         )
         if not options:
             return self.async_abort(reason="no_devices")
@@ -644,6 +757,11 @@ class LinkSubentryFlow(ConfigSubentryFlow):
         options = _device_options(
             self.hass,
             include_services=(await async_load_settings(self.hass)).include_services,
+            # Its own devices stay listed; devices linked elsewhere don't.
+            exclude_device_ids=linked_device_ids(
+                self.hass, skip_subentry_id=subentry.subentry_id
+            )
+            - {old_main_id, *old_ids},
         )
         available = {option["value"] for option in options}
 

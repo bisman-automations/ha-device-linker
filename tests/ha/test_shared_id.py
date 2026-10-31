@@ -21,7 +21,10 @@ from custom_components.device_linker.manager import (
     link_payload,
     save_link,
 )
-from custom_components.device_linker.registry import normalize_link_value
+from custom_components.device_linker.registry import (
+    devices_in_links,
+    normalize_link_value,
+)
 from homeassistant.helpers import device_registry as dr
 from tests.ha.helpers import links, remove_link
 from tests.ha.test_config_flow import _add_link, _devices, _setup_hub
@@ -324,4 +327,7 @@ async def test_include_services_offers_them_again(hass) -> None:
     schema = result["data_schema"].schema
     key = next(k for k in schema if str(k) == CONF_MAIN_DEVICE_ID)
     offered = {option["value"] for option in schema[key].config["options"]}
-    assert {player.id, routine.id, curtain.id} <= offered
+    # Turning it on can link the curtains and their routine automatically;
+    # devices in a link aren't offered again.
+    assert {player.id, routine.id, curtain.id} <= offered | devices_in_links(hass)
+    assert player.id in offered

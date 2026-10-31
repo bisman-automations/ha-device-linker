@@ -202,6 +202,11 @@ class Suggestion:
     shared_tokens: int = 0
     config_entry_id_a: str | None = None
     config_entry_id_b: str | None = None
+    # Set when one device is already in a link: confirming adds the other
+    # device (``join_device_id``) to that link instead of making a new one.
+    join_link_id: str | None = None
+    join_link_title: str | None = None
+    join_device_id: str | None = None
 
     @property
     def key(self) -> str:
@@ -231,6 +236,7 @@ class Suggestion:
                 self.area_name_a or "Unassigned",
                 self.area_name_b or "Unassigned",
             ],
+            "joins_link": self.join_link_title,
         }
 
 

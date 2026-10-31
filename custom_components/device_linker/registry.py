@@ -11,6 +11,7 @@ from homeassistant.helpers.device_registry import (
     DeviceEntry,
     DeviceEntryType,
     DeviceRegistry,
+    async_get as async_get_device_registry,
     format_mac,
 )
 from homeassistant.loader import LoaderError, async_get_loaded_integration
@@ -247,3 +248,59 @@ def iter_links(
         (hub, hub.subentries[subentry_id], settings)
         for subentry_id, settings in links.items()
     ]
+
+
+def devices_in_links(
+    hass: HomeAssistant, *, skip_subentry_id: str | None = None
+) -> set[str]:
+    """Ids of every device already in a link (main or linked).
+
+    ``skip_subentry_id`` leaves out one link, the one being edited.
+    """
+    ids: set[str] = set()
+    for _hub, subentry, settings in iter_links(hass):
+        if subentry.subentry_id == skip_subentry_id:
+            continue
+        main_id = settings.get(CONF_MAIN_DEVICE_ID)
+        if isinstance(main_id, str):
+            ids.add(main_id)
+        ids.update(
+            d for d in settings.get(CONF_LINKED_DEVICE_IDS) or [] if isinstance(d, str)
+        )
+    return ids
+
+
+def _all_devices(registry: DeviceRegistry) -> Iterable[DeviceEntry]:
+    """Every device: ``registry.devices`` is a mapping on 2026.8, iterable later."""
+    devices = registry.devices
+    for item in devices:
+        yield devices[item] if isinstance(item, str) else item
+
+
+def linked_device_ids(
+    hass: HomeAssistant, *, skip_subentry_id: str | None = None
+) -> set[str]:
+    """Ids of every device that is already linked to another device.
+
+    That is every device in a link, and every device Home Assistant already
+    shows as linked because it shares an identifier or connection with
+    another device. Services (a TV Mgmt profile, a Daily Routine routine)
+    link themselves to their device; that doesn't count, or a TV with a
+    profile could never be linked to its network device.
+    ``skip_subentry_id`` leaves out one link, the one being edited.
+    """
+    linked = devices_in_links(hass, skip_subentry_id=skip_subentry_id)
+    holders: dict[tuple[str, str, str], set[str]] = {}
+    for device in _all_devices(async_get_device_registry(hass)):
+        if is_service(hass, device):
+            continue
+        for kind, pairs in (
+            ("identifier", text_pairs(device.identifiers)),
+            ("connection", text_pairs(device.connections)),
+        ):
+            for first, second in pairs:
+                holders.setdefault((kind, first, second), set()).add(device.id)
+    for ids in holders.values():
+        if len(ids) > 1:
+            linked |= ids
+    return linked

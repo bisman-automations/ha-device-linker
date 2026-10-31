@@ -1,9 +1,15 @@
 {
   "config": {
+    "flow_title": "{name}",
     "step": {
       "user": {
         "title": "Set up Device Linker",
         "description": "Device Linker links devices that are the same hardware, so Home Assistant shows them together under Linked devices. It looks for devices that share a MAC address or hardware identifier, or that have the same or a similar name, and links strong matches on its own. Each link shows under Device Linker, where you can edit or delete it, or add one by hand with Add link. Other matches show as discovered."
+      },
+      "discovery_join": {
+        "title": "Add {device} to {link}?",
+        "description": "{device} ({integration}) matches {member}, which is already in the link {link}. Submit adds {device} to that link, so Home Assistant shows it with the other devices in it.",
+        "data": {}
       },
       "discovery_mac": {
         "title": "Link {device_a} with {device_b}?",
@@ -38,7 +44,9 @@
       "already_configured": "Device Linker is already set up. To link devices by hand, choose Add link on the Device Linker entry.",
       "not_set_up": "Set up Device Linker first.",
       "device_not_found": "A device in this suggestion is no longer available.",
+      "already_linked": "A device in this suggestion is already linked to another device, so this suggestion no longer applies.",
       "linked": "Linked. The link is under Device Linker, where you can edit or delete it.",
+      "same_integration": "That link already has a device from the same integration, and two devices of one integration can't share its MAC address or ID.",
       "ignored": "This link suggestion was ignored and will not be offered again."
     }
   },
@@ -115,14 +123,14 @@
       "step": {
         "user": {
           "title": "Choose the main device",
-          "description": "Choose the device that already has the MAC address, or select manual entry. Registered MAC addresses appear next to each device.",
+          "description": "Choose the device that already has the MAC address, or select manual entry. Registered MAC addresses appear next to each device. Devices already linked to another device are not listed; to change a link, edit it.",
           "data": {
             "main_device_id": "Main device"
           }
         },
         "devices": {
           "title": "Choose devices to link",
-          "description": "Select all devices to link to {main_name}. You can select multiple devices.",
+          "description": "Select all devices to link to {main_name}. You can select multiple devices. Devices already linked to another device are not listed.",
           "data": {
             "linked_device_ids": "Devices to link"
           }
@@ -160,7 +168,7 @@
       },
       "abort": {
         "already_configured": "These devices are already linked with this MAC address or ID.",
-        "no_devices": "Add devices in another integration before configuring Device Linker.",
+        "no_devices": "There are no devices to link: every device is already linked to another device, or no other integration has added devices yet. To change a link, edit it.",
         "device_not_found": "A selected device is no longer available."
       }
     }

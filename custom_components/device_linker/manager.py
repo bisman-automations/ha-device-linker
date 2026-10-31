@@ -83,6 +83,7 @@ from .registry import (
     iter_links,
     link_title,
     link_unique_id,
+    linked_device_ids,
     text_pairs,
 )
 
@@ -230,8 +231,12 @@ class SuggestionManager:
             match_names=self._settings.match_names,
             copied_macs=_copied_macs(self.hass),
         )
+        # A device already linked to another device isn't offered for a new
+        # link. A device that isn't linked yet and matches one already in a
+        # link is offered to join that link instead.
+        matches, auto = _for_links(self.hass, matches)
         plans = plan_auto_links(
-            matches,
+            auto,
             enabled=self._settings.auto_link,
             threshold=self._settings.auto_link_threshold,
             similar_names=self._settings.auto_link_similar,
@@ -267,6 +272,7 @@ class SuggestionManager:
         scan: bool = True,
     ) -> None:
         """Store new preferences and, by default, scan again."""
+        services_were_included = self._settings.include_services
         self._settings = replace(
             self._settings,
             threshold=_clamp_threshold(threshold),
@@ -286,6 +292,12 @@ class SuggestionManager:
             ),
         )
         await _save_settings(self._store, self._settings)
+        hub = hub_entry(self.hass)
+        if services_were_included and not self._settings.include_services and hub:
+            # Take services back out of automatic links now, not at the next start.
+            from . import _drop_services_from_automatic_links  # noqa: PLC0415
+
+            _drop_services_from_automatic_links(self.hass, hub)
         if scan:
             try:
                 await self.async_scan()
@@ -407,6 +419,11 @@ class SuggestionManager:
             ):
                 continue
             if unique_id not in wanted:
+                self.hass.config_entries.flow.async_abort(flow["flow_id"])
+                continue
+            # A pair that now joins a link (or no longer does) is asked again.
+            joins = wanted[unique_id].join_link_id is not None
+            if joins != (flow.get("step_id") == "discovery_join"):
                 self.hass.config_entries.flow.async_abort(flow["flow_id"])
                 continue
             active.add(unique_id)
@@ -567,9 +584,145 @@ def _discovery_data(unique_id: str, item: Suggestion) -> dict[str, Any]:
         "reason": item.reason,
         "score": f"{item.score:.0%}",
         "mac": item.mac or "",
+        "anchor_device_id": item.anchor_device_id or "",
+        "join_link_id": item.join_link_id or "",
+        "join_link_title": item.join_link_title or "",
+        "join_device_id": item.join_device_id or "",
         "area_a": item.area_name_a or "Unassigned",
         "area_b": item.area_name_b or "Unassigned",
     }
+
+
+@dataclass(frozen=True, slots=True)
+class _Membership:
+    """The link a device is in."""
+
+    subentry_id: str
+    title: str
+    main_id: str | None
+    value: str
+    member_ids: frozenset[str]
+
+
+def _link_membership(hass: HomeAssistant) -> dict[str, _Membership]:
+    """For each device in a link, that link."""
+    found: dict[str, _Membership] = {}
+    registry = dr.async_get(hass)
+    for _hub, subentry, settings in iter_links(hass):
+        main_id = settings[CONF_MAIN_DEVICE_ID]
+        main_id = main_id if isinstance(main_id, str) else None
+        value = settings[CONF_MAC_ADDRESS]
+        if not isinstance(value, str):
+            continue
+        members = {
+            d for d in settings[CONF_LINKED_DEVICE_IDS] or [] if isinstance(d, str)
+        }
+        if main_id:
+            members.add(main_id)
+        info = _Membership(
+            subentry.subentry_id, subentry.title, main_id, value, frozenset(members)
+        )
+        for device_id in members:
+            if get_device(registry, device_id) is not None:
+                found.setdefault(device_id, info)
+    return found
+
+
+def _for_links(
+    hass: HomeAssistant, matches: list[Suggestion]
+) -> tuple[list[Suggestion], list[Suggestion]]:
+    """Fit suggestions to the existing links. Return (shown, automatic).
+
+    Two devices that aren't linked yet stay a normal suggestion. When one of
+    them is in a link and the other isn't linked at all, the suggestion joins
+    that link, once per device and link, best match first. Anything else is
+    dropped: both linked already, or one linked only by Home Assistant (no
+    link to join). A join is also left out when the new device's integration
+    already has a device in the link, since they can't share one address.
+
+    Automatic linking keeps what it did before: a join only when the match is
+    on the link's main device and MAC address.
+    """
+    linked = linked_device_ids(hass)
+    membership = _link_membership(hass)
+    registry = dr.async_get(hass)
+    shown: list[Suggestion] = []
+    auto: list[Suggestion] = []
+    seen: set[tuple[str, str]] = set()
+    for item in matches:
+        a_linked = item.device_id_a in linked
+        b_linked = item.device_id_b in linked
+        if not a_linked and not b_linked:
+            shown.append(item)
+            auto.append(item)
+            continue
+        if a_linked and b_linked:
+            continue
+        member, new = (
+            (item.device_id_a, item.device_id_b)
+            if a_linked
+            else (item.device_id_b, item.device_id_a)
+        )
+        info = membership.get(member)
+        new_device = get_device(registry, new)
+        if info is None or new_device is None or (new, info.subentry_id) in seen:
+            continue
+        member_entries = {
+            device.config_entry_id
+            for device in (get_device(registry, d) for d in info.member_ids)
+            if device is not None
+        }
+        if new_device.config_entry_id in member_entries:
+            continue
+        seen.add((new, info.subentry_id))
+        if item.anchor_device_id == info.main_id and item.mac == info.value:
+            auto.append(item)
+        shown.append(
+            replace(
+                item,
+                join_link_id=info.subentry_id,
+                join_link_title=info.title,
+                join_device_id=new,
+            )
+        )
+    return shown, auto
+
+
+def may_join(hass: HomeAssistant, link_id: str, device_id: str) -> bool:
+    """Whether a device may still join this link: in no link, and not linked."""
+    info = next(
+        (m for m in _link_membership(hass).values() if m.subentry_id == link_id),
+        None,
+    )
+    return info is not None and device_id not in linked_device_ids(hass)
+
+
+def may_link(
+    hass: HomeAssistant,
+    device_id_a: str,
+    device_id_b: str,
+    anchor_device_id: str | None,
+    mac: str | None,
+    linked: set[str],
+) -> bool:
+    """Whether two devices may be linked, given the devices already linked.
+
+    Neither may be linked to another device already. The one exception
+    extends a link: the linked device is the main device of an existing link
+    on this MAC address, and the other device joins it.
+    """
+    a_linked = device_id_a in linked
+    b_linked = device_id_b in linked
+    if not a_linked and not b_linked:
+        return True
+    if a_linked and b_linked:
+        return False
+    if anchor_device_id is None or mac is None or anchor_device_id not in linked:
+        return False
+    return (
+        find_link(hass, link_unique_id(anchor_device_id, mac), anchor_device_id, mac)
+        is not None
+    )
 
 
 def find_link(

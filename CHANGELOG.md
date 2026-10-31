@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-10-30
+
+### Added
+
+- **Suggestions can add a device to an existing link.** A device that isn't linked yet but matches a device already in a link is now offered as **Add X to Link Y?**, so it's clear it joins that link. It works whichever device in the link it matched, and for links with a typed MAC address or a shared ID too. Each Discovered entry is now titled with the devices it's about.
+
+### Fixed
+
+- **Linked devices aren't offered again.** A device that's already linked to another device is no longer offered for a new link: not in **Add link** (as the main device or a device to link), and not as a suggestion or an automatic link. That covers devices Device Linker linked and devices Home Assistant already shows as linked (a shared MAC address or ID). When you edit a link, its own devices are still listed.
+- **Linking from Discovered updates the other suggestions.** Once two devices are linked, suggestions with either of them are removed from Discovered. A suggestion that was already open when that happened stops and says it no longer applies.
+- **Turning off Include services takes effect right away.** Services are taken out of automatic links as soon as you save the setting, instead of at the next restart. Saving any setting looks for suggestions again.
+
 ## [2.5.1] - 2026-10-30
 
 ### Fixed
@@ -155,6 +167,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.6.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.5.1...v2.6.0
 [2.5.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.4.0...v2.4.1

@@ -55,7 +55,7 @@ Select the button above, or go to **Settings > Devices & services > Add integrat
 
 Each link is listed under the Device Linker entry, the way a group of devices is listed under one integration. Links Device Linker finds on its own appear there by themselves. To add one yourself, open **Device Linker** under **Settings > Devices & services** and choose **Add link**:
 
-1. Choose the main device, the one that already has the MAC address. Each device is listed with its integration, and any MAC addresses already registered on it. Or choose **Manual MAC entry** when the address is not registered on a device yet.
+1. Choose the main device, the one that already has the MAC address. Each device is listed with its integration, and any MAC addresses already registered on it. Or choose **Manual MAC entry** when the address is not registered on a device yet. Devices already linked to another device aren't listed here or in the next step, whether Device Linker linked them or Home Assistant already shows them as linked. To change a link, edit it.
 2. Select one or more devices to link. You can pick several. Each must come from a different config entry than the main device and than each other. A device Home Assistant already shows as linked to the main device (because they share an identifier or connection, like the Ford integration and Ford Assistant sharing a VIN) is refused with its name, since there's nothing to add.
 3. Confirm the MAC address. When the main device has registered addresses, they are listed and a single address is preselected. You can still type a different address. Colons and hyphens both work (`AA:BB:CC:DD:EE:FF` or `AA-BB-CC-DD-EE-FF`).
 
@@ -103,6 +103,8 @@ A name is linked automatically only when exactly one of the devices has exactly 
 A device is not linked or suggested when it is disabled, when it belongs to the same config entry (Home Assistant cannot put one MAC on two of that entry's devices), when the two devices already share a MAC connection, when it is a service rather than hardware (what an integration adds next to your devices, such as a Daily Routine routine, or any device of a service integration, such as Music Assistant's players; turn on **Include services** under **Matching settings** to link them too), or when you have already ignored or unlinked that pair. An existing link does not hide a different device: a third **Living Room TV** is added to the same link.
 
 Weaker matches still appear under **Settings > Devices & services** as a discovered integration: **Link X with Y?** Confirming it adds the link under the Device Linker entry. **Ignore** dismisses that pair and does not offer it again, including after a restart.
+
+A device that isn't linked yet but matches a device already in a link is offered to join that link instead: **Add X to Link Y to N devices?** Confirming it adds the device to that link, with the link's MAC address or ID. It's offered once per device and link, whichever device in the link it matched, and not when the link already has a device from the same integration. A device that's already linked to another device is never offered for a new link. Every new, changed or deleted link, and every change to the settings, updates the suggestions straight away.
 
 Turn **Link strong matches automatically** off under **Configure** to go back to confirm-each-one. The area rule above still applies.
 

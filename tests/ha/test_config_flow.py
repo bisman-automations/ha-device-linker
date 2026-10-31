@@ -17,7 +17,7 @@ from custom_components.device_linker.const import (
 )
 from custom_components.device_linker.manager import async_get_manager
 from custom_components.device_linker.registry import hub_entry
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.config_entries import SOURCE_RECONFIGURE, SOURCE_USER
 from homeassistant.helpers import device_registry as dr
 from tests.ha.helpers import links
 
@@ -57,6 +57,12 @@ def _devices(hass, *specs):
             )
         )
     return devices
+
+
+def _offered(result, field) -> set[str]:
+    schema = result["data_schema"].schema
+    key = next(k for k in schema if str(k) == field)
+    return {option["value"] for option in schema[key].config["options"]}
 
 
 async def test_device_linker_is_set_up_once(hass) -> None:
@@ -112,30 +118,59 @@ async def test_add_link_links_several_devices_to_the_main_mac(hass) -> None:
             device.id
         ).connections
 
-    # A device that is already linked to the main device is refused, by name.
-    (third,) = _devices(hass, ("third_integration", "Third device", None))
+    # Devices already in a link aren't offered again when adding a link.
     result = await _add_link(hass, hub)
+    assert result["reason"] == "no_devices"  # every device is in a link
+    (sixth,) = _devices(hass, ("sixth_integration", "Sixth device", None))
+    result = await _add_link(hass, hub)
+    offered = _offered(result, CONF_MAIN_DEVICE_ID)
+    assert MANUAL_ENTRY in offered
+    assert not offered & {main.id, target.id, second.id}
     result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: main.id}
-    )
-    result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [target.id]}
+        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
     )
     assert result["step_id"] == "devices"
-    assert result["errors"] == {"base": "already_linked"}
-    assert result["description_placeholders"]["already_linked"] == (
-        "Target device (target_integration)"
-    )
+    assert not _offered(result, CONF_LINKED_DEVICE_IDS) & {
+        main.id,
+        target.id,
+        second.id,
+    }
 
-    # The same main device and MAC can't be added twice.
+    # Devices Home Assistant already links (a shared MAC) aren't offered either.
+    fourth, fifth = _devices(
+        hass,
+        ("fourth_integration", "Fourth device", "11:22:33:44:55:66"),
+        ("fifth_integration", "Fifth device", "11:22:33:44:55:66"),
+    )
+    result = await _add_link(hass, hub)
+    assert not _offered(result, CONF_MAIN_DEVICE_ID) & {fourth.id, fifth.id}
     result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [third.id]}
+        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
+    )
+    assert not _offered(result, CONF_LINKED_DEVICE_IDS) & {fourth.id, fifth.id}
+
+    # Editing a link still lists its own devices, but not another link's.
+    result = await _add_link(hass, hub)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
     )
     result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], user_input={CONF_SELECTED_MAC_ADDRESS: MAC}
+        result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [sixth.id]}
     )
-    assert result["type"] == "abort"
-    assert result["reason"] == "already_configured"
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_MAC_ADDRESS: "22:33:44:55:66:77"}
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+    first = next(link for link in links(hass) if link.settings[CONF_MAIN_DEVICE_ID])
+    result = await hass.config_entries.subentries.async_init(
+        (hub.entry_id, SUBENTRY_LINK),
+        context={"source": SOURCE_RECONFIGURE, "subentry_id": first.entry_id},
+    )
+    assert result["step_id"] == "reconfigure"
+    offered = _offered(result, CONF_LINKED_DEVICE_IDS)
+    assert {main.id, target.id, second.id} <= offered
+    assert sixth.id not in offered
 
 
 async def test_manual_mac_entry_links_a_device(hass) -> None:
@@ -215,15 +250,17 @@ async def test_mac_conflict_names_the_device_already_using_it(hass) -> None:
     )
     hub = await _setup_hub(hass)
 
+    # The main device already shares that MAC, so it isn't offered; type it.
     result = await _add_link(hass, hub)
+    assert main.id not in _offered(result, CONF_MAIN_DEVICE_ID)
     result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: main.id}
+        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
     )
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [target.id]}
     )
     result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"], user_input={CONF_SELECTED_MAC_ADDRESS: MAC}
+        result["flow_id"], user_input={CONF_MAC_ADDRESS: MAC}
     )
     assert result["errors"]["base"] == "connection_conflict"
     assert (
