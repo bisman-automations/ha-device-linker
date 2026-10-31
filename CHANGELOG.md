@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2026-10-30
+
+### Added
+
+- **Add devices to an existing link.** **Add link** has a new choice, **Add devices to an existing link**: pick the link, then the devices to add, and they get the link's MAC address or ID. It shows once you have a link. Devices already linked to another device, and devices from an integration already in that link, aren't listed.
+- **See which devices are left out, and why.** **Add link** now names the devices it doesn't list because they're already linked, with the link each one is in, or "linked by Home Assistant" when it shares an address or ID with another device on its own. It names up to five, then says how many more.
+- **Each MAC address says where it came from.** When a suggestion or **Add link** offers MAC addresses to share, each one now shows the device and integration it came from, such as "Family Room speaker (unifi)".
+
 ## [2.6.0] - 2026-10-30
 
 ### Added
@@ -167,6 +175,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.7.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.5.1...v2.6.0
 [2.5.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.4.1...v2.5.0

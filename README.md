@@ -55,13 +55,15 @@ Select the button above, or go to **Settings > Devices & services > Add integrat
 
 Each link is listed under the Device Linker entry, the way a group of devices is listed under one integration. Links Device Linker finds on its own appear there by themselves. To add one yourself, open **Device Linker** under **Settings > Devices & services** and choose **Add link**:
 
-1. Choose the main device, the one that already has the MAC address. Each device is listed with its integration, and any MAC addresses already registered on it. Or choose **Manual MAC entry** when the address is not registered on a device yet. Devices already linked to another device aren't listed here or in the next step, whether Device Linker linked them or Home Assistant already shows them as linked. To change a link, edit it.
+1. Choose the main device, the one that already has the MAC address. Each device is listed with its integration, and any MAC addresses already registered on it. Or choose **Manual MAC entry** when the address is not registered on a device yet. Devices already linked to another device aren't listed here or in the next step, whether Device Linker linked them or Home Assistant already shows them as linked. A note above the list names them, with the link each one is in (up to five, then how many more). To change a link, edit it.
 2. Select one or more devices to link. You can pick several. Each must come from a different config entry than the main device and than each other. A device Home Assistant already shows as linked to the main device (because they share an identifier or connection, like the Ford integration and Ford Assistant sharing a VIN) is refused with its name, since there's nothing to add.
 3. Confirm the MAC address. When the main device has registered addresses, they are listed and a single address is preselected. You can still type a different address. Colons and hyphens both work (`AA:BB:CC:DD:EE:FF` or `AA-BB-CC-DD-EE-FF`).
 
    No MAC address in common? Type another ID the devices share instead, such as a serial number or a VIN. Every device in the link gets it, the main device included, and Home Assistant shows them as linked. Something that looks like part of a MAC address (`AA:BB:CC`) is refused, so a typo doesn't become an ID by mistake.
 
 The confirmation screen lists the selected device names. If the address is already in use, the error names the device that has it. Choose a different MAC or a different device.
+
+To add devices to a link that's already there, choose **Add devices to an existing link** as the main device, pick the link, then the devices to add. They get the link's MAC address or ID. Devices already linked to another device, and devices from an integration already in that link, aren't listed.
 
 **Upgrading from 1.x.** Each link used to be its own Device Linker entry. The first start after upgrading moves every one of them under a single Device Linker entry, keeping the devices, MAC addresses and titles. Nothing is unlinked along the way, and the old entries disappear.
 

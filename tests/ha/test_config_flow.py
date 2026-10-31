@@ -2,7 +2,11 @@
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.device_linker.config_flow import MANUAL_ENTRY
+from custom_components.device_linker.config_flow import (
+    CONF_LINK_ID,
+    JOIN_LINK,
+    MANUAL_ENTRY,
+)
 from custom_components.device_linker.const import (
     CONF_ADDED_CONNECTIONS,
     CONF_AUTO_LINK_SIMILAR,
@@ -144,6 +148,11 @@ async def test_add_link_links_several_devices_to_the_main_mac(hass) -> None:
     )
     result = await _add_link(hass, hub)
     assert not _offered(result, CONF_MAIN_DEVICE_ID) & {fourth.id, fifth.id}
+    # The form names what it left out, and why.
+    hidden = result["description_placeholders"]["hidden"]
+    assert hidden.startswith("5 devices aren't listed because they're already linked:")
+    assert "Main device (in Link Main device to 2 devices)" in hidden
+    assert "Fourth device (linked by Home Assistant)" in hidden
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
     )
@@ -288,3 +297,86 @@ async def test_settings_are_on_the_hub(hass) -> None:
     assert result["type"] == "create_entry"
     await hass.async_block_till_done()
     assert manager.settings.auto_link_similar is False
+
+
+async def test_add_devices_to_an_existing_link(hass) -> None:
+    """Add link can add devices to a link that's already there."""
+    main, target, newcomer = _devices(
+        hass,
+        ("main_integration", "Main device", "AA:BB:CC:DD:EE:FF"),
+        ("target_integration", "Target device", None),
+        ("new_integration", "New device", None),
+    )
+    hub = await _setup_hub(hass)
+
+    # No links yet: the choice isn't offered.
+    result = await _add_link(hass, hub)
+    assert JOIN_LINK not in _offered(result, CONF_MAIN_DEVICE_ID)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: main.id}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [target.id]}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_SELECTED_MAC_ADDRESS: MAC}
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+    (link,) = links(hass)
+
+    # A second device of the target's integration can't share the address.
+    same_entry = dr.async_get(hass).async_get_or_create(
+        config_entry_id=target.config_entry_id,
+        identifiers={("target_integration", "second")},
+        name="Second target device",
+    )
+
+    result = await _add_link(hass, hub)
+    assert JOIN_LINK in _offered(result, CONF_MAIN_DEVICE_ID)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: JOIN_LINK}
+    )
+    assert result["step_id"] == "join"
+    assert _offered(result, CONF_LINK_ID) == {link.entry_id}
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_LINK_ID: link.entry_id}
+    )
+    assert result["step_id"] == "join_devices"
+    assert result["description_placeholders"]["link"] == link.title
+    offered = _offered(result, CONF_LINKED_DEVICE_IDS)
+    assert newcomer.id in offered
+    assert not offered & {main.id, target.id, same_entry.id}
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [newcomer.id]}
+    )
+    assert result["type"] == "abort"
+    assert result["reason"] == "joined"
+    await hass.async_block_till_done()
+
+    (link,) = links(hass)
+    assert link.settings[CONF_MAIN_DEVICE_ID] == main.id
+    assert link.settings[CONF_LINKED_DEVICE_IDS] == [target.id, newcomer.id]
+    assert link.settings[CONF_ADDED_CONNECTIONS][newcomer.id] is True
+    assert link.title == "Link Main device to 2 devices"
+    assert (dr.CONNECTION_NETWORK_MAC, MAC) in dr.async_get(hass).async_get(
+        newcomer.id
+    ).connections
+
+
+async def test_hidden_note_names_five_then_counts(hass) -> None:
+    """Past five devices, the note says how many more."""
+    hub = await _setup_hub(hass)
+    for number in range(4):
+        _devices(
+            hass,
+            (f"left_{number}", f"Device {number}A", f"02:00:00:00:00:0{number}"),
+            (f"right_{number}", f"Device {number}B", f"02:00:00:00:00:0{number}"),
+        )
+    _devices(hass, ("free_integration", "Free device", None))
+    result = await _add_link(hass, hub)
+    hidden = result["description_placeholders"]["hidden"]
+    assert hidden.startswith("8 devices aren't listed")
+    assert hidden.endswith("and 3 more.")
+    assert "Device 0A (linked by Home Assistant)" in hidden

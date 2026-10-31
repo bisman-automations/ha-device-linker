@@ -319,3 +319,39 @@ async def test_rescan_action_and_option_switches(hass) -> None:
     assert manager.settings.threshold == 0.9
     assert manager.settings.match_hardware is False
     assert not any(item.reason == "mac" for item in manager.suggestions)
+
+
+async def test_each_mac_names_the_device_and_integration_it_came_from(hass) -> None:
+    """Two addresses on a suggestion can be told apart."""
+    await _anchor(hass)
+    await _disable_auto_link(hass)
+    unifi = _register(
+        hass,
+        domain="unifi",
+        name="Family Room speaker",
+        area="Family Room",
+        connections={(dr.CONNECTION_NETWORK_MAC, "02:11:22:33:44:55")},
+    )
+    apple = _register(
+        hass,
+        domain="apple_tv",
+        name="Family Room speaker",
+        area="Family Room",
+        connections={(dr.CONNECTION_NETWORK_MAC, "02:66:77:88:99:aa")},
+    )
+    await async_get_manager(hass).async_scan()
+    flow = next(
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"].get("unique_id") == suggestion_unique_id(unifi.id, apple.id)
+    )
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"])
+    schema = result["data_schema"].schema
+    key = next(k for k in schema if str(k) == "selected_mac_address")
+    labels = {
+        option["value"]: option["label"] for option in schema[key].config["options"]
+    }
+    assert labels == {
+        "02:11:22:33:44:55": "02:11:22:33:44:55 — Family Room speaker (unifi)",
+        "02:66:77:88:99:aa": "02:66:77:88:99:aa — Family Room speaker (apple_tv)",
+    }

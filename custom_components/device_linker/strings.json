@@ -123,14 +123,28 @@
       "step": {
         "user": {
           "title": "Choose the main device",
-          "description": "Choose the device that already has the MAC address, or select manual entry. Registered MAC addresses appear next to each device. Devices already linked to another device are not listed; to change a link, edit it.",
+          "description": "Choose the device that already has the MAC address, or select manual entry. Registered MAC addresses appear next to each device. To change a link, edit it.\n\n{hidden}",
           "data": {
             "main_device_id": "Main device"
           }
         },
+        "join": {
+          "title": "Add devices to an existing link",
+          "description": "Choose the link to add devices to.",
+          "data": {
+            "link_id": "Link"
+          }
+        },
+        "join_devices": {
+          "title": "Add devices to {link}",
+          "description": "Select the devices to add. They get the link's MAC address or ID, and Home Assistant shows them with the other devices in it. Devices already linked to another device, and devices from an integration already in this link, are not listed.",
+          "data": {
+            "linked_device_ids": "Devices to add"
+          }
+        },
         "devices": {
           "title": "Choose devices to link",
-          "description": "Select all devices to link to {main_name}. You can select multiple devices. Devices already linked to another device are not listed.",
+          "description": "Select all devices to link to {main_name}. You can select multiple devices.\n\n{hidden}",
           "data": {
             "linked_device_ids": "Devices to link"
           }
@@ -169,7 +183,9 @@
       "abort": {
         "already_configured": "These devices are already linked with this MAC address or ID.",
         "no_devices": "There are no devices to link: every device is already linked to another device, or no other integration has added devices yet. To change a link, edit it.",
-        "device_not_found": "A selected device is no longer available."
+        "device_not_found": "A selected device is no longer available.",
+        "joined": "Added. The devices are now in the link.",
+        "no_links": "There are no links yet. Choose a main device, or Manual MAC entry, to make one."
       }
     }
   }

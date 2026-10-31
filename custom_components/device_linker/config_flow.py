@@ -63,6 +63,7 @@ from .manager import (
     plan_entry_data,
     save_link,
 )
+from .matching import normalize_mac
 from .registry import (
     already_linked,
     device_has_link,
@@ -71,6 +72,7 @@ from .registry import (
     is_hub,
     is_mac,
     is_service,
+    iter_links,
     link_settings,
     link_title,
     link_unique_id,
@@ -80,6 +82,9 @@ from .registry import (
 )
 
 MANUAL_ENTRY = "__manual_entry__"
+# Add link: add devices to a link that already exists.
+JOIN_LINK = "__join_link__"
+CONF_LINK_ID = "link_id"
 
 
 def _threshold_selector() -> selector.NumberSelector:
@@ -179,8 +184,46 @@ def _submitted_mac(user_input: dict[str, Any]) -> str:
     )
 
 
-def _mac_schema(discovered: list[str], current: str | None = None) -> dict:
-    """MAC fields: discovered choices plus a manual override."""
+def _mac_sources(hass: HomeAssistant, *devices) -> dict[str, str]:
+    """Label each MAC address with the devices it came from.
+
+    A MAC registered as a connection, or carried in an identifier (a Shelly
+    or Zigbee device's own MAC), is named with that device and its
+    integration: ``"Kitchen Speaker (unifi)"``.
+    """
+    sources: dict[str, list[str]] = {}
+    for device in devices:
+        if device is None:
+            continue
+        entry = hass.config_entries.async_get_entry(device.config_entry_id)
+        label = _device_label(device, entry.domain if entry else "unknown", False)
+        values = {
+            dr.format_mac(value)
+            for kind, value in text_pairs(device.connections)
+            if kind == dr.CONNECTION_NETWORK_MAC
+        }
+        values |= {
+            mac
+            for _domain, value in text_pairs(device.identifiers)
+            if (mac := normalize_mac(value))
+        }
+        for mac in values:
+            if label not in sources.setdefault(mac, []):
+                sources[mac].append(label)
+    return {mac: ", ".join(labels) for mac, labels in sources.items()}
+
+
+def _mac_schema(
+    discovered: list[str],
+    current: str | None = None,
+    sources: dict[str, str] | None = None,
+) -> dict:
+    """MAC fields: discovered choices plus a manual override.
+
+    ``sources`` labels each address with the device and integration it came
+    from, so two addresses can be told apart.
+    """
+    sources = sources or {}
     schema: dict[vol.Marker, object] = {}
     if current and discovered and current not in discovered:
         discovered = sorted([*discovered, current])
@@ -194,7 +237,10 @@ def _mac_schema(discovered: list[str], current: str | None = None) -> dict:
         schema[key] = selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=[
-                    selector.SelectOptionDict(value=mac, label=mac)
+                    selector.SelectOptionDict(
+                        value=mac,
+                        label=f"{mac} — {sources[mac]}" if mac in sources else mac,
+                    )
                     for mac in discovered
                 ],
                 mode=selector.SelectSelectorMode.DROPDOWN,
@@ -516,7 +562,11 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id=f"discovery_{reason}",
-            data_schema=vol.Schema(_mac_schema(discovered)),
+            data_schema=vol.Schema(
+                _mac_schema(
+                    discovered, sources=_mac_sources(self.hass, device_a, device_b)
+                )
+            ),
             errors=errors,
             description_placeholders={
                 "device_a": str(discovery.get("name_a", "")),
@@ -573,6 +623,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
         """Initialize flow state."""
         self._main_device_id: str | None = None
         self._linked_device_ids: list[str] = []
+        self._join_link_id: str | None = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -584,6 +635,8 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             if main_id == MANUAL_ENTRY:
                 self._main_device_id = None
                 return await self.async_step_devices()
+            if main_id == JOIN_LINK:
+                return await self.async_step_join()
             main = get_device(dr.async_get(self.hass), main_id)
             if main is None:
                 errors["base"] = "device_not_found"
@@ -591,18 +644,27 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 self._main_device_id = main.id
                 return await self.async_step_devices()
 
+        joinable = (
+            [
+                selector.SelectOptionDict(
+                    value=JOIN_LINK, label="Add devices to an existing link"
+                )
+            ]
+            if self._get_entry().subentries
+            else []
+        )
+        include_services = (await async_load_settings(self.hass)).include_services
         options = [
             selector.SelectOptionDict(value=MANUAL_ENTRY, label="Manual MAC entry"),
+            *joinable,
             *_device_options(
                 self.hass,
                 include_mac=True,
                 exclude_device_ids=linked_device_ids(self.hass),
-                include_services=(
-                    await async_load_settings(self.hass)
-                ).include_services,
+                include_services=include_services,
             ),
         ]
-        if len(options) == 1:
+        if len(options) == 1 + len(joinable):
             return self.async_abort(reason="no_devices")
         return self.async_show_form(
             step_id="user",
@@ -617,6 +679,138 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 }
             ),
             errors=errors,
+            description_placeholders={
+                "hidden": _hidden_note(self.hass, include_services)
+            },
+        )
+
+    async def async_step_join(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Choose the link to add devices to."""
+        entry = self._get_entry()
+        links = {
+            subentry_id: subentry
+            for subentry_id, subentry in entry.subentries.items()
+            if subentry.subentry_type == SUBENTRY_LINK
+        }
+        if not links:
+            return self.async_abort(reason="no_links")
+        if user_input is not None and user_input[CONF_LINK_ID] in links:
+            self._join_link_id = user_input[CONF_LINK_ID]
+            return await self.async_step_join_devices()
+        options = sorted(
+            (
+                selector.SelectOptionDict(value=subentry_id, label=subentry.title)
+                for subentry_id, subentry in links.items()
+            ),
+            key=lambda option: option["label"].casefold(),
+        )
+        return self.async_show_form(
+            step_id="join",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_LINK_ID): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+        )
+
+    async def async_step_join_devices(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Choose devices to add to the chosen link."""
+        entry = self._get_entry()
+        subentry = entry.subentries.get(self._join_link_id or "")
+        if subentry is None:
+            return self.async_abort(reason="no_links")
+        registry = dr.async_get(self.hass)
+        settings = link_settings(subentry.data)
+        main_id = settings[CONF_MAIN_DEVICE_ID]
+        main_id = main_id if isinstance(main_id, str) else None
+        main = get_device(registry, main_id) if main_id else None
+        old_ids = [
+            d for d in settings[CONF_LINKED_DEVICE_IDS] or [] if isinstance(d, str)
+        ]
+        value = str(settings[CONF_MAC_ADDRESS])
+        members = [
+            device
+            for device in (get_device(registry, d) for d in [main_id, *old_ids] if d)
+            if device is not None
+        ]
+        member_entries = {device.config_entry_id for device in members}
+        errors: dict[str, str] = {}
+        conflicts: list[str] = []
+        if user_input is not None:
+            new_ids = [
+                d
+                for d in dict.fromkeys(user_input[CONF_LINKED_DEVICE_IDS])
+                if d not in old_ids and d != main_id
+            ]
+            new_devices = [get_device(registry, d) for d in new_ids]
+            linked_ids = [*old_ids, *new_ids]
+            error = _check_devices(registry, main, linked_ids)
+            if not new_ids:
+                errors["base"] = "no_linked_devices"
+            elif error:
+                errors["base"] = error
+            else:
+                conflicts = _connection_conflicts(self.hass, new_devices, value)
+                if conflicts:
+                    errors["base"] = "connection_conflict"
+                else:
+                    added = dict(settings[CONF_ADDED_CONNECTIONS])
+                    added.update(dict.fromkeys(new_ids, True))
+                    save_link(
+                        self.hass,
+                        entry,
+                        subentry,
+                        link_payload(
+                            main_id,
+                            linked_ids,
+                            value,
+                            added,
+                            str(settings[CONF_ORIGIN]),
+                        ),
+                        link_title(
+                            _link_name(
+                                main, [get_device(registry, d) for d in linked_ids]
+                            ),
+                            len(linked_ids),
+                        ),
+                        subentry.unique_id or link_unique_id(main_id, value),
+                    )
+                    return self.async_abort(reason="joined")
+
+        # Devices not linked to anything, from integrations not in the link yet.
+        options = [
+            option
+            for option in _device_options(
+                self.hass,
+                include_services=(
+                    await async_load_settings(self.hass)
+                ).include_services,
+                exclude_device_ids=linked_device_ids(self.hass),
+            )
+            if (device := get_device(registry, option["value"])) is not None
+            and device.config_entry_id not in member_entries
+        ]
+        if not options:
+            return self.async_abort(reason="no_devices")
+        return self.async_show_form(
+            step_id="join_devices",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_LINKED_DEVICE_IDS): _devices_selector(options)}
+            ),
+            errors=errors,
+            description_placeholders={
+                "link": subentry.title,
+                "conflicting_devices": ", ".join(conflicts) or "none",
+            },
         )
 
     async def async_step_devices(
@@ -670,6 +864,11 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             description_placeholders={
                 "main_name": _display_name(main) if main else "Manual entry",
                 "already_linked": already_names,
+                "hidden": _hidden_note(
+                    self.hass,
+                    (await async_load_settings(self.hass)).include_services,
+                    skip_device_id=self._main_device_id,
+                ),
             },
         )
 
@@ -722,7 +921,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
 
         return self.async_show_form(
             step_id="confirm",
-            data_schema=vol.Schema(_mac_schema(_network_macs(main))),
+            data_schema=vol.Schema(
+                _mac_schema(_network_macs(main), sources=_mac_sources(self.hass, main))
+            ),
             errors=errors,
             description_placeholders={
                 "main_name": _display_name(main) if main else "Manual entry",
@@ -893,6 +1094,52 @@ def _ends_for(main, devices, value: str):
     if device_has_link(main, value):
         return main.id, linked
     return None, [main, *linked]
+
+
+# How many hidden devices the note names before "and N more".
+HIDDEN_NAMES = 5
+
+
+def _hidden_note(
+    hass: HomeAssistant, include_services: bool, *, skip_device_id: str | None = None
+) -> str:
+    """Name the devices left out because they're already linked.
+
+    Each is named with the link it's in, or as linked by Home Assistant when
+    it shares an identifier or connection with another device on its own.
+    Empty when nothing is hidden.
+    """
+    hidden_ids = {
+        option["value"]
+        for option in _device_options(hass, include_services=include_services)
+    } & linked_device_ids(hass)
+    hidden_ids.discard(skip_device_id)
+    if not hidden_ids:
+        return ""
+    link_of: dict[str, str] = {}
+    for _hub, subentry, settings in iter_links(hass):
+        main_id = settings[CONF_MAIN_DEVICE_ID]
+        for device_id in [main_id, *(settings[CONF_LINKED_DEVICE_IDS] or [])]:
+            if isinstance(device_id, str):
+                link_of.setdefault(device_id, subentry.title)
+    registry = dr.async_get(hass)
+    named = sorted(
+        (
+            (_display_name(device), link_of.get(device.id))
+            for device in (get_device(registry, d) for d in hidden_ids)
+            if device is not None
+        ),
+        key=lambda pair: pair[0].casefold(),
+    )
+    parts = [
+        f"{name} (in {link})" if link else f"{name} (linked by Home Assistant)"
+        for name, link in named[:HIDDEN_NAMES]
+    ]
+    if len(named) > HIDDEN_NAMES:
+        parts.append(f"and {len(named) - HIDDEN_NAMES} more")
+    count = len(named)
+    noun = "device isn't" if count == 1 else "devices aren't"
+    return f"{count} {noun} listed because they're already linked: {', '.join(parts)}."
 
 
 def _link_name(main, devices) -> str:
