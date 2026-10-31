@@ -331,3 +331,18 @@ async def test_include_services_offers_them_again(hass) -> None:
     # devices in a link aren't offered again.
     assert {player.id, routine.id, curtain.id} <= offered | devices_in_links(hass)
     assert player.id in offered
+
+
+async def test_never_suggest_list_offers_devices_not_services(hass) -> None:
+    """A routine is a service: it can't go on Devices never suggested."""
+    hub = await _setup_hub(hass)
+    curtain, routine = await _service_case(hass)
+    result = await hass.config_entries.options.async_init(hub.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={"next_step_id": "settings"}
+    )
+    schema = result["data_schema"].schema
+    key = next(k for k in schema if str(k) == "ignored_devices")
+    offered = {option["value"] for option in schema[key].config["options"]}
+    assert curtain.id in offered
+    assert routine.id not in offered

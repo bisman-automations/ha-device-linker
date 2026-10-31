@@ -299,7 +299,7 @@ async def test_rescan_action_and_option_switches(hass) -> None:
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] == "menu"
-    assert result["menu_options"] == ["settings", "cleanup"]
+    assert result["menu_options"] == ["settings", "recheck", "cleanup"]
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input={"next_step_id": "settings"}
     )
@@ -406,7 +406,8 @@ async def test_preferred_mac_sources_order_and_preselect(hass) -> None:
         result["flow_id"], user_input={"next_step_id": "settings"}
     )
     defaults = result["data_schema"]({})
-    assert defaults["preferred_mac_sources"][0] == "unifi"
+    # Out of the box only installed integrations are listed: UniFi, not FRITZ!Box.
+    assert defaults["preferred_mac_sources"] == ["unifi"]
     key = next(
         k for k in result["data_schema"].schema if str(k) == "preferred_mac_sources"
     )

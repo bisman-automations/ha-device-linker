@@ -678,12 +678,22 @@ async def test_edit_link_lists_the_main_device_and_where_each_mac_came_from(
         ble_mac: f"{ble_mac} — Leak Sensor Shelly (shelly)",
     }
 
+    # Switching the address of a confirmed link needs Confirmed unticked.
+    locked = await hass.config_entries.subentries.async_configure(
+        result["flow_id"],
+        user_input={
+            "linked_device_ids": [unifi.id, matter.id, shelly.id],
+            "selected_mac_address": ble_mac,
+        },
+    )
+    assert locked["errors"] == {"base": "confirmed_locked"}
     # Choosing the Shelly's address makes the Shelly the main device.
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"],
         user_input={
             "linked_device_ids": [unifi.id, matter.id, shelly.id],
             "selected_mac_address": ble_mac,
+            "confirmed": False,
         },
     )
     assert result["reason"] == "reconfigure_successful"

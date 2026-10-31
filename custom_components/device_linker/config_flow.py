@@ -31,6 +31,7 @@ from .const import (
     CONF_AUTO_LINK,
     CONF_AUTO_LINK_SIMILAR,
     CONF_AUTO_LINK_THRESHOLD,
+    CONF_CONFIRMED,
     CONF_HUB,
     CONF_IGNORED_DEVICES,
     CONF_INCLUDE_SERVICES,
@@ -61,6 +62,7 @@ from .manager import (
     async_apply_suggestion_preferences,
     async_get_manager,
     async_load_settings,
+    device_views,
     find_link,
     link_payload,
     may_join,
@@ -70,9 +72,11 @@ from .manager import (
     save_link,
 )
 from .matching import integration_rank, normalize_mac
+from .recheck import find_mismatches, unlink_mismatches
 from .registry import (
     already_linked,
     device_has_link,
+    devices_in_links,
     get_device,
     hub_entry,
     is_hub,
@@ -400,12 +404,39 @@ def _mac_source_options(
     ]
 
 
+def _ignorable_device_options(
+    hass: HomeAssistant, settings
+) -> list[selector.SelectOptionDict]:
+    """Devices that can be put on the never-suggest list.
+
+    The same devices suggestions can use: hardware, plus services only when
+    Include services is on. Devices already on the list stay listed, so they
+    can be taken off.
+    """
+    options = _device_options(hass, include_services=settings.include_services)
+    listed = {option["value"] for option in options}
+    registry = dr.async_get(hass)
+    for device_id in sorted(settings.ignored_devices - listed):
+        device = get_device(registry, device_id)
+        options.append(
+            selector.SelectOptionDict(
+                value=device_id,
+                label=_display_name(device) if device else "A removed device",
+            )
+        )
+    return options
+
+
 def _suggestion_schema(
     settings, hass: HomeAssistant | None = None
 ) -> dict[vol.Marker, object]:
     """Settings for suggestions and automatic linking, for every link."""
     preferred = preferred_mac_sources(settings)
     extra: dict[vol.Marker, object] = {}
+    if hass is not None and settings.preferred_mac_sources is None:
+        # The defaults: show only the integrations that are installed.
+        installed = {entry.domain for entry in hass.config_entries.async_entries()}
+        preferred = tuple(d for d in preferred if d in installed)
     if hass is not None:
         extra[vol.Optional(CONF_PREFERRED_MAC_SOURCES, default=list(preferred))] = (
             selector.SelectSelector(
@@ -416,6 +447,17 @@ def _suggestion_schema(
                     sort=False,
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
+            )
+        )
+    tail: dict[vol.Marker, object] = {}
+    if hass is not None:
+        tail[
+            vol.Optional(CONF_IGNORED_DEVICES, default=sorted(settings.ignored_devices))
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=_ignorable_device_options(hass, settings),
+                multiple=True,
+                mode=selector.SelectSelectorMode.DROPDOWN,
             )
         )
     return {
@@ -441,9 +483,7 @@ def _suggestion_schema(
         vol.Optional(CONF_MATCH_NAMES, default=settings.match_names): (
             selector.BooleanSelector()
         ),
-        vol.Optional(
-            CONF_IGNORED_DEVICES, default=sorted(settings.ignored_devices)
-        ): selector.DeviceSelector(selector.DeviceSelectorConfig(multiple=True)),
+        **tail,
     }
 
 
@@ -501,13 +541,16 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if manager is not None and manager.is_dismissed(discovery_info["unique_id"]):
             return self.async_abort(reason="ignored")
         if discovery_info.get("join_link_id"):
-            new_name = (
-                discovery_info["name_b"]
+            side = (
+                "b"
                 if discovery_info.get("join_device_id") == discovery_info["device_id_b"]
-                else discovery_info["name_a"]
+                else "a"
             )
+            new_name = discovery_info[f"name_{side}"]
+            integration = discovery_info.get(f"integration_{side}", "")
             self.context["title_placeholders"] = {
-                "name": f"Add {new_name} to {discovery_info['join_link_title']}"
+                "name": f"Add {new_name} ({integration}) to "
+                f"{discovery_info['join_link_title']}"
             }
             return await self.async_step_discovery_join()
         self.context["title_placeholders"] = {
@@ -610,6 +653,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         value,
                         {**dict(settings[CONF_ADDED_CONNECTIONS]), new.id: True},
                         str(settings[CONF_ORIGIN]),
+                        bool(settings[CONF_CONFIRMED]),
                     ),
                     link_title(_link_name(main, devices), len(devices) + bool(main)),
                     subentry.unique_id or link_unique_id(main_id, value),
@@ -749,8 +793,10 @@ def _add_link_to_hub(
     linked = list(payload[CONF_LINKED_DEVICE_IDS])
     added = dict(payload[CONF_ADDED_CONNECTIONS])
     origin = ORIGIN_MANUAL
+    confirmed = True
     if existing is not None:
         current = existing[1]
+        confirmed = bool(current[CONF_CONFIRMED])
         linked = [*current[CONF_LINKED_DEVICE_IDS]] + [
             device_id
             for device_id in linked
@@ -763,7 +809,7 @@ def _add_link_to_hub(
         hass,
         hub,
         existing[0] if existing is not None else None,
-        link_payload(main_id, linked, mac, added, origin),
+        link_payload(main_id, linked, mac, added, origin, confirmed),
         link_title(
             _link_name(main, [get_device(registry, device_id) for device_id in linked]),
             len(linked) + bool(main),
@@ -816,7 +862,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             *_device_options(
                 self.hass,
                 include_mac=True,
-                exclude_device_ids=linked_device_ids(self.hass),
+                # A device linked only by Home Assistant can share its MAC
+                # with more devices, so it can be the main device.
+                exclude_device_ids=devices_in_links(self.hass),
                 include_services=include_services,
             ),
         ]
@@ -836,7 +884,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             ),
             errors=errors,
             description_placeholders={
-                "hidden": _hidden_note(self.hass, include_services)
+                "hidden": _hidden_note(
+                    self.hass, include_services, hidden=devices_in_links(self.hass)
+                )
             },
         )
 
@@ -931,6 +981,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                             value,
                             added,
                             str(settings[CONF_ORIGIN]),
+                            bool(settings[CONF_CONFIRMED]),
                         ),
                         link_title(
                             _link_name(
@@ -1147,10 +1198,21 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             selected = list(dict.fromkeys(user_input.get(CONF_LINKED_DEVICE_IDS, [])))
             devices = [get_device(registry, d) for d in selected]
             mac = _submitted_mac(user_input)
+            confirmed = bool(user_input.get(CONF_CONFIRMED, old[CONF_CONFIRMED]))
+            kept = {old_main_id, *old_ids} - {None}
+            # A confirmed link keeps its devices and address until you untick
+            # Confirmed (in the same save is fine).
+            locked = (
+                bool(old[CONF_CONFIRMED])
+                and confirmed
+                and (not kept <= set(selected) or (mac and mac != old_mac))
+            )
             if any(device is None for device in devices):
                 errors["base"] = "device_not_found"
             elif not mac:
                 errors["base"] = "invalid_mac"
+            elif locked:
+                errors["base"] = "confirmed_locked"
             else:
                 owners = [
                     device.id
@@ -1201,7 +1263,12 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                             ),
                             unique_id=unique_id,
                             data=link_payload(
-                                main_id, linked_ids, mac, added, str(old[CONF_ORIGIN])
+                                main_id,
+                                linked_ids,
+                                mac,
+                                added,
+                                str(old[CONF_ORIGIN]),
+                                confirmed,
                             ),
                         )
 
@@ -1249,6 +1316,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 )
             ),
             vol.Optional(CONF_MAC_ADDRESS): str,
+            vol.Optional(CONF_CONFIRMED, default=bool(old[CONF_CONFIRMED])): (
+                selector.BooleanSelector()
+            ),
         }
         main = get_device(registry, old_main_id) if old_main_id else None
         return self.async_show_form(
@@ -1294,7 +1364,11 @@ HIDDEN_NAMES = 5
 
 
 def _hidden_note(
-    hass: HomeAssistant, include_services: bool, *, skip_device_id: str | None = None
+    hass: HomeAssistant,
+    include_services: bool,
+    *,
+    skip_device_id: str | None = None,
+    hidden: set[str] | None = None,
 ) -> str:
     """Name the devices left out because they're already linked.
 
@@ -1305,7 +1379,7 @@ def _hidden_note(
     hidden_ids = {
         option["value"]
         for option in _device_options(hass, include_services=include_services)
-    } & linked_device_ids(hass)
+    } & (linked_device_ids(hass) if hidden is None else hidden)
     hidden_ids.discard(skip_device_id)
     if not hidden_ids:
         return ""
@@ -1371,6 +1445,9 @@ def _check_devices(registry, main, linked_ids: list[str]) -> str | None:
     return None
 
 
+# The recheck form field holding the devices to take out of their links.
+CONF_UNLINK = "unlink"
+
 # The options form field holding the chosen leftovers.
 CONF_LEFTOVERS = "leftovers"
 
@@ -1383,7 +1460,7 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlow):
     ) -> ConfigFlowResult:
         """Choose what to do."""
         return self.async_show_menu(
-            step_id="init", menu_options=["settings", "cleanup"]
+            step_id="init", menu_options=["settings", "recheck", "cleanup"]
         )
 
     async def async_step_settings(
@@ -1397,6 +1474,55 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="settings",
             data_schema=vol.Schema(_suggestion_schema(settings, self.hass)),
+        )
+
+    async def async_step_recheck(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """List devices in automatic links the current rules wouldn't link."""
+        settings = await async_load_settings(self.hass)
+        try:
+            mismatches = find_mismatches(
+                self.hass,
+                self.config_entry,
+                device_views(self.hass, include_services=settings.include_services),
+                settings,
+                preferred_mac_sources(settings),
+            )
+        except Exception:
+            _LOGGER.exception("Rechecking automatic links failed")
+            return self.async_abort(reason="recheck_failed")
+        if user_input is not None:
+            chosen = set(user_input.get(CONF_UNLINK) or [])
+            removed = unlink_mismatches(
+                self.hass,
+                self.config_entry,
+                [item.key for item in mismatches if item.key in chosen],
+            )
+            return self.async_abort(
+                reason="rechecked", description_placeholders={"removed": str(removed)}
+            )
+        if not mismatches:
+            return self.async_abort(reason="nothing_to_recheck")
+        return self.async_show_form(
+            step_id="recheck",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_UNLINK, default=[]): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(
+                                    value=item.key, label=item.label
+                                )
+                                for item in mismatches
+                            ],
+                            multiple=True,
+                            mode=selector.SelectSelectorMode.LIST,
+                        )
+                    )
+                }
+            ),
+            description_placeholders={"count": str(len(mismatches))},
         )
 
     async def async_step_cleanup(

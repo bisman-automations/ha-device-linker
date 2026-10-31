@@ -150,16 +150,21 @@ async def test_add_link_links_several_devices_to_the_main_mac(hass) -> None:
         ("fifth_integration", "Fifth device", "11:22:33:44:55:66"),
     )
     result = await _add_link(hass, hub)
-    assert not _offered(result, CONF_MAIN_DEVICE_ID) & {fourth.id, fifth.id}
-    # The form names what it left out, and why.
+    # They can be the main device, sharing their MAC with more devices.
+    assert {fourth.id, fifth.id} <= _offered(result, CONF_MAIN_DEVICE_ID)
+    # The form names what it left out, and why: devices in a link.
     hidden = result["description_placeholders"]["hidden"]
-    assert hidden.startswith("5 devices aren't listed because they're already linked:")
+    assert hidden.startswith("3 devices aren't listed because they're already linked:")
     assert "Main device — in Main device (3 Devices Linked)" in hidden
-    assert "Fourth device — linked by Home Assistant" in hidden
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
     )
+    # But not as a device to link: they're already linked.
     assert not _offered(result, CONF_LINKED_DEVICE_IDS) & {fourth.id, fifth.id}
+    assert (
+        "Fourth device — linked by Home Assistant"
+        in (result["description_placeholders"]["hidden"])
+    )
 
     # Editing a link still lists its own devices, but not another link's.
     result = await _add_link(hass, hub)
@@ -265,7 +270,7 @@ async def test_mac_conflict_names_the_device_already_using_it(hass) -> None:
 
     # The main device already shares that MAC, so it isn't offered; type it.
     result = await _add_link(hass, hub)
-    assert main.id not in _offered(result, CONF_MAIN_DEVICE_ID)
+    assert main.id in _offered(result, CONF_MAIN_DEVICE_ID)
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
     )
@@ -290,7 +295,7 @@ async def test_settings_are_on_the_hub(hass) -> None:
 
     result = await hass.config_entries.options.async_init(hub.entry_id)
     assert result["type"] == "menu"
-    assert result["menu_options"] == ["settings", "cleanup"]
+    assert result["menu_options"] == ["settings", "recheck", "cleanup"]
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input={"next_step_id": "settings"}
     )
@@ -380,6 +385,9 @@ async def test_hidden_note_names_five_then_counts(hass) -> None:
         )
     _devices(hass, ("free_integration", "Free device", None))
     result = await _add_link(hass, hub)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
+    )
     hidden = result["description_placeholders"]["hidden"]
     assert hidden.startswith("8 devices aren't listed")
     assert hidden.endswith("and 3 more.")

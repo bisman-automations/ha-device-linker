@@ -40,6 +40,7 @@ from .const import (
     CONF_AUTO_LINK,
     CONF_AUTO_LINK_SIMILAR,
     CONF_AUTO_LINK_THRESHOLD,
+    CONF_CONFIRMED,
     CONF_IGNORED_DEVICES,
     CONF_INCLUDE_SERVICES,
     CONF_LINKED_DEVICE_IDS,
@@ -74,6 +75,7 @@ from .matching import (
     DeviceView,
     Suggestion,
     choose_link_ends,
+    integration_rank,
     pair_key,
     pairs_among,
     plan_auto_links,
@@ -239,7 +241,7 @@ class SuggestionManager:
         matches = suggest(
             [
                 view
-                for view in _device_views(
+                for view in device_views(
                     self.hass,
                     include_services=(self._settings.include_services),
                 )
@@ -256,7 +258,9 @@ class SuggestionManager:
         # A device already linked to another device isn't offered for a new
         # link. A device that isn't linked yet and matches one already in a
         # link is offered to join that link instead.
-        matches, auto = _for_links(self.hass, matches)
+        matches, auto = _for_links(
+            self.hass, matches, preferred_mac_sources(self._settings)
+        )
         plans = plan_auto_links(
             auto,
             enabled=self._settings.auto_link,
@@ -598,7 +602,15 @@ class SuggestionManager:
             device = get_device(registry, device_id)
             if device is not None:
                 added[device_id] = connection not in device.connections
-        payload = link_payload(plan.anchor_device_id, chosen, plan.mac, added, origin)
+        payload = link_payload(
+            plan.anchor_device_id,
+            chosen,
+            plan.mac,
+            added,
+            origin,
+            # Extending a link keeps whether you confirmed it.
+            bool(existing[1][CONF_CONFIRMED]) if existing is not None else False,
+        )
         anchor_name = anchor.name_by_user or anchor.name or plan.anchor_name
         save_link(
             self.hass,
@@ -676,17 +688,36 @@ def _link_membership(hass: HomeAssistant) -> dict[str, _Membership]:
     return found
 
 
+def _mac_holders(hass: HomeAssistant) -> dict[str, list[dr.DeviceEntry]]:
+    """Devices that registered each network MAC (not services)."""
+    holders: dict[str, list[dr.DeviceEntry]] = {}
+    for device in _iter_devices(dr.async_get(hass)):
+        if is_service(hass, device):
+            continue
+        for kind, value in text_pairs(device.connections):
+            if kind == dr.CONNECTION_NETWORK_MAC:
+                holders.setdefault(dr.format_mac(value), []).append(device)
+    return holders
+
+
 def _for_links(
-    hass: HomeAssistant, matches: list[Suggestion]
+    hass: HomeAssistant,
+    matches: list[Suggestion],
+    preferred: tuple[str, ...] = (),
 ) -> tuple[list[Suggestion], list[Suggestion]]:
     """Fit suggestions to the existing links. Return (shown, automatic).
 
     Two devices that aren't linked yet stay a normal suggestion. When one of
     them is in a link and the other isn't linked at all, the suggestion joins
     that link, once per device and link, best match first. Anything else is
-    dropped: both linked already, or one linked only by Home Assistant (no
-    link to join). A join is also left out when the new device's integration
-    already has a device in the link, since they can't share one address.
+    dropped: both linked already. A join is also left out when the new
+    device's integration already has a device in the link, since they can't
+    share one address.
+
+    A device linked only by Home Assistant (UniFi and ESPHome both registered
+    one MAC) can still take a new device into that group: the suggestion
+    shares that MAC, once per group, through the device from the most
+    trusted integration (the preferred MAC sources).
 
     Automatic linking keeps what it did before: a join only when the match is
     on the link's main device and MAC address.
@@ -697,6 +728,7 @@ def _for_links(
     shown: list[Suggestion] = []
     auto: list[Suggestion] = []
     seen: set[tuple[str, str]] = set()
+    holders: dict[str, list[dr.DeviceEntry]] | None = None
     for item in matches:
         a_linked = item.device_id_a in linked
         b_linked = item.device_id_b in linked
@@ -713,7 +745,31 @@ def _for_links(
         )
         info = membership.get(member)
         new_device = get_device(registry, new)
-        if info is None or new_device is None or (new, info.subentry_id) in seen:
+        if new_device is None:
+            continue
+        if info is None:
+            # Linked by Home Assistant only: extend that group through its MAC.
+            if holders is None:
+                holders = _mac_holders(hass)
+            group = holders.get(item.mac or "", [])
+            if item.anchor_device_id != member or len(group) < 2:
+                continue
+            best = min(
+                group,
+                key=lambda device: (
+                    integration_rank(_domain_of(hass, device), preferred),
+                    device.id,
+                ),
+            )
+            if best.id != member or (new, f"mac:{item.mac}") in seen:
+                continue
+            if new_device.config_entry_id in {d.config_entry_id for d in group}:
+                continue
+            seen.add((new, f"mac:{item.mac}"))
+            shown.append(item)
+            auto.append(item)
+            continue
+        if (new, info.subentry_id) in seen:
             continue
         member_entries = {
             device.config_entry_id
@@ -734,6 +790,11 @@ def _for_links(
             )
         )
     return shown, auto
+
+
+def _domain_of(hass: HomeAssistant, device: dr.DeviceEntry) -> str:
+    entry = hass.config_entries.async_get_entry(device.config_entry_id)
+    return entry.domain if entry else ""
 
 
 def may_join(hass: HomeAssistant, link_id: str, device_id: str) -> bool:
@@ -852,7 +913,9 @@ def link_payload(
     mac: str,
     added: dict[str, bool],
     origin: str,
+    confirmed: bool | None = None,
 ) -> dict[str, Any]:
+    """A link's stored data. A link you make is confirmed unless told otherwise."""
     return {
         CONF_MAIN_DEVICE_ID: main_id,
         CONF_LINKED_DEVICE_IDS: linked_ids,
@@ -861,6 +924,7 @@ def link_payload(
             device_id: bool(added.get(device_id, False)) for device_id in linked_ids
         },
         CONF_ORIGIN: origin,
+        CONF_CONFIRMED: (origin == ORIGIN_MANUAL) if confirmed is None else confirmed,
     }
 
 
@@ -936,7 +1000,7 @@ def _iter_devices(registry: dr.DeviceRegistry):
             yield item
 
 
-def _device_views(
+def device_views(
     hass: HomeAssistant, *, include_services: bool = False
 ) -> list[DeviceView]:
     """Snapshot registry devices that can take part in a suggestion."""

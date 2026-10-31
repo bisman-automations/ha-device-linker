@@ -34,6 +34,8 @@ CONF_AUTO_LINK_SIMILAR = "auto_link_similar"
 # Also link services: devices marked as services and every device of a
 # service integration (Music Assistant players). Off by default.
 CONF_INCLUDE_SERVICES = "include_services"
+# A link you've confirmed is never unlinked by Device Linker on its own.
+CONF_CONFIRMED = "confirmed"
 # Integrations trusted to report a device's real MAC address, most trusted
 # first. Their address is preferred when a link has a choice.
 CONF_PREFERRED_MAC_SOURCES = "preferred_mac_sources"

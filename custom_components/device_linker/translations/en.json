@@ -74,6 +74,7 @@
         "title": "Device Linker",
         "menu_options": {
           "settings": "Matching settings",
+          "recheck": "Recheck automatic links",
           "cleanup": "Clean up leftover addresses"
         }
       },
@@ -106,13 +107,23 @@
         "data": {
           "leftovers": "Addresses to remove"
         }
+      },
+      "recheck": {
+        "title": "Recheck automatic links",
+        "description": "These {count} devices were linked automatically, but the current matching rules and your settings wouldn't link them to their link's main device. Choose the ones to take out of their link. Each one you take out is remembered as unlinked, so it isn't linked again automatically. Links you made yourself, and links you ticked as Confirmed, are never listed.",
+        "data": {
+          "unlink": "Devices to take out"
+        }
       }
     },
     "abort": {
       "no_leftovers": "No leftover addresses found. Every MAC address and shared ID Device Linker added is used by a current link.",
       "cleanup_failed": "Something went wrong while cleaning up. Nothing more was changed. The details are in Settings > System > Logs, under Device Linker.",
       "cleaned": "Removed {removed}. Home Assistant no longer shows those devices as linked through them.",
-      "cleaned_some": "Removed {removed}. Home Assistant wouldn't change {failed}, so their addresses were left as they are. The reason is in Settings > System > Logs."
+      "cleaned_some": "Removed {removed}. Home Assistant wouldn't change {failed}, so their addresses were left as they are. The reason is in Settings > System > Logs.",
+      "nothing_to_recheck": "Every automatic link still matches the current rules and your settings, or is confirmed.",
+      "rechecked": "Took {removed} devices out of their links. A link left with only its main device was deleted.",
+      "recheck_failed": "Something went wrong while rechecking. Nothing was changed. The details are in Settings > System > Logs, under Device Linker."
     }
   },
   "entity": {
@@ -188,12 +199,14 @@
           "data": {
             "linked_device_ids": "Devices in this link",
             "selected_mac_address": "MAC address to share",
-            "mac_address": "Or type a MAC address or shared ID"
+            "mac_address": "Or type a MAC address or shared ID",
+            "confirmed": "Confirmed"
           },
           "data_description": {
             "linked_device_ids": "The device the MAC address came from is included. Add or remove devices here.",
             "selected_mac_address": "Addresses the devices in this link registered themselves, with the device each came from.",
-            "mac_address": "Type a MAC address that isn't listed, or another ID such as a serial number or VIN."
+            "mac_address": "Type a MAC address that isn't listed, or another ID such as a serial number or VIN.",
+            "confirmed": "A confirmed link is never changed by Device Linker on its own, and its devices and address stay as they are until you untick this. Links you make yourself start confirmed."
           }
         }
       },
@@ -203,7 +216,8 @@
         "already_linked": "Home Assistant already shows these as linked devices, because they share an identifier or connection: {already_linked}. Remove them from the list.",
         "no_linked_devices": "Select at least one device to link.",
         "invalid_mac": "Select a MAC address, or type one (such as AA:BB:CC:DD:EE:FF) or another ID both devices can share, such as a serial number or VIN.",
-        "connection_conflict": "That MAC address or ID is already used by {conflicting_devices}. Choose a different one or remove the conflicting device."
+        "connection_conflict": "That MAC address or ID is already used by {conflicting_devices}. Choose a different one or remove the conflicting device.",
+        "confirmed_locked": "This link is confirmed, so its devices and address can't change. Untick Confirmed to remove a device or switch the address."
       },
       "abort": {
         "already_configured": "These devices are already linked with this MAC address or ID.",

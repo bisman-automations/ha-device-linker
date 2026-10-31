@@ -147,7 +147,9 @@ def test_same_area_name_match_respects_the_threshold() -> None:
         threshold=1.0,
         match_hardware=False,
     )
-    # Identical distinctive words score 1.0, so raise the bar with a weaker pair.
+    # A setting of 1 means the same name only: this close pair isn't one.
+    assert none == []
+    # Raise the bar with a weaker pair.
     weak_left = _device("a", name="North hall", area_id=kitchen, area_name="Kitchen")
     weak_right = _device("b", name="South porch", area_id=kitchen, area_name="Kitchen")
     weak = matching.suggest(
@@ -158,7 +160,6 @@ def test_same_area_name_match_respects_the_threshold() -> None:
         match_hardware=False,
     )
     assert weak == []
-    assert none  # the ceiling pair still matches at 1.0
 
 
 def test_name_matches_stay_inside_one_area() -> None:
@@ -305,11 +306,12 @@ def test_living_room_tv_normalization_keeps_the_name() -> None:
     assert matching.normalize_name("UniFi Living Room Apple TV", "Living Room") == "tv"
     assert matching.fold_name("Living Room TV") == matching.fold_name("living-room tv")
     assert matching.name_similarity("Living Room TV", "Living Room TV", None) == 1.0
+    # Still a suggestion at the default 0.8, but an Apple TV isn't the TV.
     assert (
         matching.name_similarity(
             "Living Room TV", "Living Room Apple TV", "Living Room"
         )
-        == 1.0
+        == 0.9
     )
 
 
@@ -864,7 +866,7 @@ def test_a_real_leftover_word_is_not_a_full_match() -> None:
     assert score < 0.8
     # A model code left over still counts: the same camera.
     score, _ = matching._name_score("Deck", "G4 Deck", None)
-    assert score == 1.0
+    assert score == 0.99
 
 
 def test_two_different_brands_are_not_a_name_match() -> None:
@@ -906,3 +908,36 @@ def test_the_preferred_integration_supplies_the_address() -> None:
     )
     # Neither on the list: still left for you to choose.
     assert matching._name_anchor(unifi, other, set(), ("esphome",)) == (None, None)
+
+
+def test_a_setting_of_one_means_the_same_name() -> None:
+    """Only names that are the same (apart from the area or a "(Cloud)" tag) score 1."""
+    same = [
+        ("Guest Bedroom Left Lamp", "Guest Bedroom Left Lamp (Cloud)", "Guest Bedroom"),
+        ("Master Bedroom Alex's Remote", "Alex's Remote", "Master Bedroom"),
+    ]
+    for left, right, area in same:
+        assert matching._name_score(left, right, area)[0] == 1.0
+    close = [
+        ("Alex's MacBook Pro (Work)", "Alex's Macbook Pro", None),
+        ("Family Room TV Light Socket", "Family Room TV Lights", "Family Room"),
+    ]
+    for left, right, area in close:
+        assert matching._name_score(left, right, area)[0] < 1.0
+
+
+def test_different_kinds_of_device_and_a_possessive_do_not_match() -> None:
+    """A light socket isn't a media player; "Alex's" is one word, not two."""
+    assert (
+        matching._name_score(
+            "Family Room TV Light Socket", "Family Room TV Media", "Family Room"
+        )[0]
+        == 0.0
+    )
+    assert matching._name_score("Garage TV", "Garage Apple TV", "Garage")[0] < 1.0
+    assert (
+        matching.shared_distinctive_tokens(
+            "Master Bedroom Alex's Remote", "Alex's Apple Watch", "Master Bedroom"
+        )
+        == 1
+    )

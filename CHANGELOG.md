@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] - 2026-10-30
+
+### Added
+
+- **Confirmed links.** **Edit link** has a new **Confirmed** tickbox. Device Linker never changes a confirmed link on its own, and its devices and address stay as they are until you untick it (in the same save is fine). Links you make yourself, add devices to, or accept from a suggestion start confirmed; automatic links start unconfirmed. Existing links follow the same rule.
+- **Recheck automatic links.** A new choice under **Configure** lists the devices in automatic links that the current matching rules and your settings wouldn't link, with nothing ticked. Take out the ones you choose: the address Device Linker copied comes off, the pair is remembered so it isn't linked again, and a link left with only its main device is deleted. Links you made yourself, and confirmed links, are never listed.
+
+### Changed
+
+- **Devices can join a group Home Assistant already links.** When two devices share a MAC address on their own (UniFi and ESPHome for the same lamp), a device with the same name and no address, such as the Matter or Cloud lamp, is now linked to that group through the shared address, using the device from your most trusted MAC source. It's suggested once per group, or linked automatically for the same name. **Add link** also offers those devices as the main device.
+- **The same name with a tag counts as exact.** "Guest Bedroom Left Lamp" and "Guest Bedroom Left Lamp (Cloud)" are an exact match, so they link automatically like any other exact name.
+- **Turning off Include services leaves confirmed links alone.** Services are still taken out of unconfirmed automatic links.
+
+### Fixed
+
+- **Devices never suggested listed services.** The list in **Matching settings** offered every device, including services such as routines and the Ford Assistant helper. It now offers only devices, the same ones suggestions can use; services appear only with **Include services** on. Each device is shown with its integration.
+- **A similarity setting of 1 let different names through.** Names were compared after dropping generic words like Light, Socket, Media and Remote, and brands, so "Family Room TV Light Socket", "Family Room TV Media" and "Garage Apple TV" all came down to "tv" and scored 100%. Now only names that are the same, apart from the area or a tag like "(Cloud)", score 100%, so a setting of 1 means just that. Close names like "MacBook Pro (Work)" and "Macbook Pro" score at most 99%.
+- **Different kinds of device matched.** When both names say what kind of device they are and the kinds differ ("Light Socket" and "Media"), they no longer match. A brand on only one name ("Garage TV" and "Garage Apple TV") keeps the score at 90%, so it can be a suggestion but is never linked automatically.
+- **"Alex's" counted as two words.** The "s" after an apostrophe is no longer a word, so two names sharing only a person's name aren't a strong match.
+- **Two suggestions with the same title.** A suggestion to add a device to a link now names the device's integration, such as "Add Guest Bedroom Hub (switchbot_cloud) to …".
+- **Preferred MAC address sources listed integrations you don't have.** Until you save the setting, only the default integrations that are installed are shown.
+
 ## [2.9.0] - 2026-10-30
 
 ### Added
@@ -205,6 +227,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.10.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.7.1...v2.8.0
 [2.7.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.7.0...v2.7.1

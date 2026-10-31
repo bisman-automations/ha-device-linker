@@ -19,6 +19,7 @@ from homeassistant.loader import LoaderError, async_get_loaded_integration
 from .const import (
     CONF_ADDED_CONNECTION,
     CONF_ADDED_CONNECTIONS,
+    CONF_CONFIRMED,
     CONF_DEVICE_ID,
     CONF_HUB,
     CONF_LINKED_DEVICE_IDS,
@@ -108,6 +109,9 @@ def link_settings(data: Mapping[str, Any]) -> dict[str, object]:
         # Entries saved before 1.3.0 have no origin. They were created by a
         # person, and automatic linking must not relabel them.
         CONF_ORIGIN: origin,
+        # Before 2.10.0 there was no confirmed flag: a link you made yourself
+        # counts as confirmed, an automatic one doesn't until you tick it.
+        CONF_CONFIRMED: bool(settings.get(CONF_CONFIRMED, origin == ORIGIN_MANUAL)),
     }
 
 

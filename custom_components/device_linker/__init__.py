@@ -25,6 +25,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CONF_ADDED_CONNECTIONS,
+    CONF_CONFIRMED,
     CONF_HUB,
     CONF_LINKED_DEVICE_IDS,
     CONF_MAC_ADDRESS,
@@ -343,7 +344,8 @@ def _drop_services_from_automatic_links(
     """
     registry = dr.async_get(hass)
     for subentry_id, settings in hub_links(entry).items():
-        if settings[CONF_ORIGIN] != ORIGIN_AUTO:
+        # A link made by hand, or one you confirmed, is left as it is.
+        if settings[CONF_ORIGIN] != ORIGIN_AUTO or settings[CONF_CONFIRMED]:
             continue
         subentry = entry.subentries[subentry_id]
         main_id = settings[CONF_MAIN_DEVICE_ID]
@@ -400,6 +402,7 @@ def _storable(settings: dict[str, Any]) -> dict[str, Any]:
         CONF_MAC_ADDRESS: settings[CONF_MAC_ADDRESS],
         CONF_ADDED_CONNECTIONS: dict(settings[CONF_ADDED_CONNECTIONS]),
         CONF_ORIGIN: settings[CONF_ORIGIN],
+        CONF_CONFIRMED: settings[CONF_CONFIRMED],
     }
 
 

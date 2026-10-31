@@ -338,6 +338,8 @@ def normalize_name(name: str, area_name: str | None) -> str:
         and token not in _CONNECTION_TOKENS
         and token not in ignored
         and not token.isdigit()
+        # The "s" of "Alex's" is not a word.
+        and len(token) > 1
     ]
     return " ".join(tokens)
 
@@ -413,17 +415,62 @@ def _name_score(name_a: str, name_b: str, area_name: str | None) -> tuple[float,
     folded_b = fold_name(name_b)
     if folded_a and folded_a == folded_b:
         return 1.0, True
+    # The same name apart from the area and a connection tag ("Left Lamp" and
+    # "Guest Bedroom Left Lamp (Cloud)") is the same device: a full, exact
+    # score.
+    core_a = _core_name(folded_a, area_name)
+    core_b = _core_name(folded_b, area_name)
+    if core_a and core_a == core_b:
+        # The same name: it counts as exact, so it can link automatically.
+        return 1.0, True
     # Two different brands are two different devices: "Apple TV" and
-    # "TV (Google Cast)". One name with a brand and one without can still match.
+    # "TV (Google Cast)".
     brands_a = set(folded_a.split()) & _BRAND_TOKENS
     brands_b = set(folded_b.split()) & _BRAND_TOKENS
     if brands_a and brands_b and not brands_a & brands_b:
+        return 0.0, False
+    # Two kinds of device are two devices: "TV Light Socket" and "TV Media".
+    kinds_a = _kinds(folded_a)
+    kinds_b = _kinds(folded_b)
+    if kinds_a and kinds_b and not kinds_a & kinds_b:
         return 0.0, False
     left = normalize_name(name_a, area_name)
     right = normalize_name(name_b, area_name)
     if not left or not right:
         return 0.0, False
-    return max(_ratio(left, right), _token_set_ratio(left, right)), False
+    score = max(_ratio(left, right), _token_set_ratio(left, right))
+    # A brand on one name only may be part of what it is ("Garage Apple TV"
+    # is not "Garage TV") or just the integration ("Shelly ceiling"): it
+    # can't be a strong match, but it can still be suggested.
+    if bool(brands_a) != bool(brands_b):
+        score = min(score, _ONE_BRAND_SCORE)
+    # Only the same name scores 1, so a setting of 1 means exactly that.
+    return min(score, _BEST_FUZZY_SCORE), False
+
+
+# The highest score a name that isn't the same can get.
+_BEST_FUZZY_SCORE = 0.99
+# The highest score when only one of the names has a brand in it.
+_ONE_BRAND_SCORE = 0.9
+
+
+def _core_name(folded: str, area_name: str | None) -> str:
+    """A folded name without its area words and connection tags."""
+    ignored = area_tokens(area_name)
+    return " ".join(
+        token
+        for token in folded.split()
+        if token not in ignored and token not in _CONNECTION_TOKENS
+    )
+
+
+def _kinds(folded: str) -> set[str]:
+    """The device-type words in a name ("light", "socket"), singular."""
+    return {
+        token[:-1] if token.endswith("s") and len(token) > 3 else token
+        for token in folded.split()
+        if token in _GENERIC_TOKENS
+    }
 
 
 def hardware_keys(

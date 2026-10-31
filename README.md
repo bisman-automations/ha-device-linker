@@ -114,7 +114,11 @@ The **Suggestions** sensor on the Device Linker device shows how many suggestion
 
 **Preferred MAC address sources** (in **Matching settings**) lists the integrations you trust to report a device's real MAC address, most trusted first. Out of the box that's network integrations such as UniFi. When a link has a choice of addresses, the one from the first integration on the list is picked: in suggestions, in **Add link**, and when two devices in an automatic match each have an address. That device becomes the main device and names the link. The order is the order you add them; to move one, remove it and add it again.
 
-**Configure** on the Device Linker entry has two choices. **Matching settings** sets both similarity minimums (from 0.5 to 1) and can turn hardware matching, name matching, automatic linking, or similar-name linking off. **Rescan suggestions** looks again immediately. Registry updates are batched for a couple of seconds so a large UniFi refresh is scanned once. Device Linker also looks again after Home Assistant has finished starting, because other integrations may still be registering devices when Device Linker itself starts.
+**Confirmed links.** Each link has a **Confirmed** tickbox in **Edit link**. Device Linker never changes a confirmed link on its own, and you can't remove its devices or switch its address until you untick it. Links you make yourself start confirmed; automatic links don't. Tick it on an automatic link you want to keep as it is.
+
+**Recheck automatic links**, under **Configure**, lists the devices in automatic links that today's matching rules and your settings wouldn't link, for example after you raise the similarity settings. Nothing is ticked. Take out the ones you choose; each is remembered as unlinked so it isn't linked again. Confirmed links and links you made are never listed.
+
+**Configure** on the Device Linker entry has three choices: **Matching settings**, **Recheck automatic links** and **Clean up leftover addresses**. **Matching settings** sets both similarity minimums (from 0.5 to 1) and can turn hardware matching, name matching, automatic linking, or similar-name linking off. **Rescan suggestions** looks again immediately. Registry updates are batched for a couple of seconds so a large UniFi refresh is scanned once. Device Linker also looks again after Home Assistant has finished starting, because other integrations may still be registering devices when Device Linker itself starts.
 
 ## Cleaning up leftover addresses
 

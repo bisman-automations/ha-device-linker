@@ -16,8 +16,8 @@ from tests.ha.test_suggestions import _disable_auto_link, _register
 SHARED = "12:34:56:78:9a:bc"
 
 
-async def test_linked_devices_are_not_suggested(hass) -> None:
-    """Two devices that share a MAC aren't paired with a third of the same name."""
+async def test_a_group_linked_by_home_assistant_takes_new_devices_once(hass) -> None:
+    """Two devices sharing a MAC are a group; a third of the same name can join it."""
     await _setup_hub(hass)
     await _disable_auto_link(hass)
     first = _register(
@@ -27,7 +27,7 @@ async def test_linked_devices_are_not_suggested(hass) -> None:
         area="Kitchen",
         connections={(dr.CONNECTION_NETWORK_MAC, SHARED)},
     )
-    second = _register(
+    _register(
         hass,
         domain="apple_tv",
         name="Kitchen Speaker",
@@ -42,8 +42,12 @@ async def test_linked_devices_are_not_suggested(hass) -> None:
         frozenset((item.device_id_a, item.device_id_b))
         for item in async_get_manager(hass).suggestions
     }
-    assert frozenset((first.id, third.id)) not in suggested
-    assert frozenset((second.id, third.id)) not in suggested
+    # The third joins the group once, through UniFi (the preferred source),
+    # sharing the group's MAC; never through the Apple TV as well.
+    assert suggested == {frozenset((first.id, third.id))}
+    (item,) = async_get_manager(hass).suggestions
+    assert item.anchor_device_id == first.id
+    assert item.mac == SHARED
     assert links(hass) == []
 
 
@@ -107,6 +111,10 @@ async def test_confirming_a_suggestion_updates_the_others(hass) -> None:
     ]
     assert len(join_flows) == 1
     assert len(flows()) == 1
+    # The title names the integration, so two same-named devices differ.
+    assert join_flows[0]["context"]["title_placeholders"]["name"] == (
+        f"Add Kitchen Speaker (cast) to {link.title}"
+    )
     shown = await hass.config_entries.flow.async_configure(join_flows[0]["flow_id"])
     assert shown["description_placeholders"]["why"] == "Their names are 100% alike."
 
@@ -225,3 +233,48 @@ async def test_never_suggest_a_device_and_take_it_back(hass) -> None:
         {item.device_id_a, item.device_id_b} == {lamp.id, plug.id}
         for item in manager.suggestions
     )
+
+
+async def test_same_named_devices_join_a_group_home_assistant_linked(hass) -> None:
+    """UniFi and ESPHome share a MAC; Matter and Cloud lamps join that group."""
+    await _setup_hub(hass)
+    mac = "02:00:00:00:00:71"
+    unifi = _register(
+        hass,
+        domain="unifi",
+        name="Guest Bedroom Left Lamp",
+        area="Guest Bedroom",
+        connections={(dr.CONNECTION_NETWORK_MAC, mac)},
+    )
+    esphome = _register(
+        hass,
+        domain="esphome",
+        name="Guest Bedroom Left Lamp (ESPHome)",
+        area="Guest Bedroom",
+        connections={(dr.CONNECTION_NETWORK_MAC, mac)},
+    )
+    matter = _register(
+        hass, domain="matter", name="Guest Bedroom Left Lamp", area="Guest Bedroom"
+    )
+    cloud = _register(
+        hass,
+        domain="switchbot_cloud",
+        name="Guest Bedroom Left Lamp (Cloud)",
+        area="Guest Bedroom",
+    )
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+
+    # The same name links on its own, through UniFi's address.
+    (link,) = links(hass)
+    assert link.settings["main_device_id"] == unifi.id
+    assert set(link.settings["linked_device_ids"]) == {matter.id, cloud.id}
+    assert link.settings["mac_address"] == mac
+    registry = dr.async_get(hass)
+    for device in (matter, cloud):
+        assert (dr.CONNECTION_NETWORK_MAC, mac) in registry.async_get(
+            device.id
+        ).connections
+    # The ESPHome lamp already has the address; it isn't added to the link.
+    assert esphome.id not in link.settings["linked_device_ids"]
+    assert async_get_manager(hass).suggestions == []
