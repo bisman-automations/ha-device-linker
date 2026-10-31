@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.1] - 2026-10-30
+
+### Fixed
+
+- **Cleaning up leftover addresses failed with "Unknown error".** Home Assistant won't remove the only address a device has, and ESPHome and UniFi devices often have nothing else. Those addresses are no longer offered, since they belong to the device itself. Addresses only shared with a service, such as a routine linked to its device, aren't offered either. If Home Assistant still refuses one, the others are removed anyway and the result names the device it refused. Each address now also shows the integration of the devices it's shared with.
+- **Devices matched only because both names end in (BLE).** Words that say how a device connects (BLE, Bluetooth, Cloud, Matter, Zigbee, Wi-Fi) no longer count when names are compared. "Family Room Lights (BLE)" was suggested with "Family Room Air Purifier (BLE)" at 100%. The same device under two connections, like "Air Purifier (BLE)" and "Air Purifier (Cloud)", still matches. A suggestion to add a device to a link now also says why it matched.
+
 ## [2.7.0] - 2026-10-30
 
 ### Added
@@ -175,6 +182,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.7.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.7.0...v2.7.1
 [2.7.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.5.1...v2.6.0
 [2.5.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.5.0...v2.5.1

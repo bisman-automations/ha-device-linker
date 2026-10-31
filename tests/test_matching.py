@@ -841,3 +841,18 @@ def test_identifiers_that_are_not_text_are_ignored() -> None:
     """Some integrations register a number as an identifier value."""
     assert matching.normalize_mac(12345) is None
     assert matching.hardware_keys((), (("numbers", 12345),)) == {}
+
+
+def test_a_connection_word_alone_is_not_a_match() -> None:
+    """Two devices that share only "BLE" aren't the same device."""
+    score, exact = matching._name_score(
+        "Family Room Air Purifier (BLE)", "Family Room Lights (BLE)", "Family Room"
+    )
+    assert (score, exact) == (0.0, False)
+    # The same device under two connections still matches.
+    score, _ = matching._name_score(
+        "Family Room Air Purifier (BLE)",
+        "Family Room Air Purifier (Cloud)",
+        "Family Room",
+    )
+    assert score == 1.0

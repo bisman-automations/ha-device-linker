@@ -449,6 +449,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             "member": _display_name(member),
             "link": subentry.title,
+            "why": _match_reason(discovery),
             "conflicting_devices": "",
         }
         if user_input is not None:
@@ -1096,6 +1097,18 @@ def _ends_for(main, devices, value: str):
     return None, [main, *linked]
 
 
+def _match_reason(discovery: dict[str, Any]) -> str:
+    """Why two devices were matched, in a sentence."""
+    reason = discovery.get("reason")
+    if reason == REASON_MAC:
+        return "They share a MAC address."
+    if reason == REASON_IDENTIFIER:
+        return (
+            "They share a hardware identifier, such as a Bluetooth or Zigbee address."
+        )
+    return f"Their names are {discovery.get('score', '')} alike."
+
+
 # How many hidden devices the note names before "and N more".
 HIDDEN_NAMES = 5
 
@@ -1213,10 +1226,20 @@ class DeviceLinkerOptionsFlow(config_entries.OptionsFlow):
         leftovers = find_leftovers(self.hass, self.config_entry, settings.unlinked)
         if user_input is not None:
             chosen = set(user_input.get(CONF_LEFTOVERS) or [])
-            remove_leftovers(
+            removed, failed = remove_leftovers(
                 self.hass, [item.key for item in leftovers if item.key in chosen]
             )
-            return self.async_create_entry(data=dict(self.config_entry.options))
+            if failed:
+                return self.async_abort(
+                    reason="cleaned_some",
+                    description_placeholders={
+                        "removed": str(removed),
+                        "failed": ", ".join(sorted(set(failed))),
+                    },
+                )
+            return self.async_abort(
+                reason="cleaned", description_placeholders={"removed": str(removed)}
+            )
         if not leftovers:
             return self.async_abort(reason="no_leftovers")
         return self.async_show_form(

@@ -153,6 +153,24 @@ _BRAND_TOKENS = frozenset(
 # :func:`names_contained`. Kept apart from _GENERIC_TOKENS so name scores do
 # not change.
 _FILLER_TOKENS = frozenset({"camera", "cam", "client", "wifi", "ethernet"})
+# Words that say how a device is connected, not what it is. Integrations add
+# them to tell their copies apart ("Air Purifier (BLE)", "Air Purifier
+# (Cloud)"), so they are dropped before names are compared: two names that
+# share only "BLE" are not the same device.
+_CONNECTION_TOKENS = frozenset(
+    {
+        "ble",
+        "bluetooth",
+        "cloud",
+        "ethernet",
+        "lan",
+        "matter",
+        "thread",
+        "wifi",
+        "zigbee",
+        "zwave",
+    }
+)
 # Short forms that mean the same word in :func:`names_contained`.
 _SHORT_FORMS = {"cam": "camera", "temp": "temperature", "tv": "television"}
 
@@ -305,7 +323,8 @@ def normalize_name(name: str, area_name: str | None) -> str:
     """Return the distinctive words of a device name.
 
     Case and punctuation are folded, then area words, generic device words,
-    and brand names are removed as whole tokens. An empty result means the
+    brand names, and connection words (BLE, Cloud, Matter) are removed as
+    whole tokens. An empty result means the
     name was only an area plus generic words. That is not enough for a
     *fuzzy* match. An exact :func:`fold_name` match still qualifies.
     """
@@ -316,6 +335,7 @@ def normalize_name(name: str, area_name: str | None) -> str:
         for token in text.split()
         if token not in _GENERIC_TOKENS
         and token not in _BRAND_TOKENS
+        and token not in _CONNECTION_TOKENS
         and token not in ignored
         and not token.isdigit()
     ]

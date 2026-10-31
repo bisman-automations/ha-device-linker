@@ -13,6 +13,13 @@ A leftover is a value on a device that no current link uses for that device:
 
 Removing a MAC that the device's own integration registered is harmless: the
 integration adds it again on its next refresh.
+
+Not offered:
+- a value that is all the device has: Home Assistant refuses to leave a
+  device with no identifiers and no connections, and such a MAC is the
+  device's own (ESPHome and UniFi register nothing else);
+- a MAC that only services share (a Daily Routine routine or a TV Mgmt
+  profile linking itself to its device), since that link is wanted.
 """
 
 from __future__ import annotations
@@ -22,10 +29,11 @@ from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_LINKED_DEVICE_IDS, CONF_MAC_ADDRESS, CONF_MAIN_DEVICE_ID, DOMAIN
-from .registry import hub_links, link_item, text_pairs
+from .registry import hub_links, is_service, link_item, text_pairs
 
 # Separates the device id and the value in a form option's value.
 SEPARATOR = "|"
@@ -97,7 +105,8 @@ def find_leftovers(
             for domain, value in text_pairs(device.identifiers)
             if domain == DOMAIN and (device.id, value) not in used
         ]
-        if device.id in unlinked_devices:
+        # A service keeps its device's MAC on purpose, to link to it.
+        if device.id in unlinked_devices and not is_service(hass, device):
             values += [
                 dr.format_mac(value)
                 for kind, value in text_pairs(device.connections)
@@ -106,16 +115,23 @@ def find_leftovers(
             ]
         for value in values:
             field, item = link_item(value)
-            shared_with = tuple(
-                sorted(
-                    _name(other)
-                    for other in devices
-                    if other.id != device.id and item in getattr(other, field)
-                )
-            )
-            # A MAC no other device shares isn't linking anything.
-            if field == "connections" and not shared_with:
+            # Home Assistant won't leave a device with nothing to identify it.
+            if not (set(device.identifiers) | set(device.connections)) - {item}:
                 continue
+            sharers = [
+                other
+                for other in devices
+                if other.id != device.id and item in getattr(other, field)
+            ]
+            if field == "connections":
+                # A service linking itself to its device is meant to stay.
+                sharers = [other for other in sharers if not is_service(hass, other)]
+                # A MAC no other device shares isn't linking anything.
+                if not sharers:
+                    continue
+            shared_with = tuple(
+                sorted(f"{_name(other)} ({domains[other.id]})" for other in sharers)
+            )
             leftovers.append(Leftover(device, domains[device.id], value, shared_with))
     return sorted(
         leftovers, key=lambda item: (_name(item.device).casefold(), item.value)
@@ -130,10 +146,15 @@ def leftover_label(leftover: Leftover) -> str:
     )
 
 
-def remove_leftovers(hass: HomeAssistant, keys: Iterable[str]) -> int:
-    """Take the chosen values off their devices. Returns how many were removed."""
+def remove_leftovers(hass: HomeAssistant, keys: Iterable[str]) -> tuple[int, list[str]]:
+    """Take the chosen values off their devices.
+
+    Returns how many were removed and the names of devices Home Assistant
+    wouldn't change. One refusal doesn't stop the rest.
+    """
     registry = dr.async_get(hass)
     removed = 0
+    failed: list[str] = []
     for key in keys:
         device_id, _, value = key.partition(SEPARATOR)
         device = registry.async_get(device_id)
@@ -143,6 +164,12 @@ def remove_leftovers(hass: HomeAssistant, keys: Iterable[str]) -> int:
         current = set(getattr(device, field))
         if item not in current:
             continue
-        registry.async_update_device(device.id, **{f"new_{field}": current - {item}})
+        try:
+            registry.async_update_device(
+                device.id, **{f"new_{field}": current - {item}}
+            )
+        except HomeAssistantError:
+            failed.append(_name(device))
+            continue
         removed += 1
-    return removed
+    return removed, failed

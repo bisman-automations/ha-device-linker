@@ -107,6 +107,8 @@ async def test_confirming_a_suggestion_updates_the_others(hass) -> None:
     ]
     assert len(join_flows) == 1
     assert len(flows()) == 1
+    shown = await hass.config_entries.flow.async_configure(join_flows[0]["flow_id"])
+    assert shown["description_placeholders"]["why"] == "Their names are 100% alike."
 
     result = await hass.config_entries.flow.async_configure(
         join_flows[0]["flow_id"], user_input={}

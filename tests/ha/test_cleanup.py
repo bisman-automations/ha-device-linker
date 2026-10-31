@@ -1,5 +1,7 @@
 """Cleaning up addresses left behind by links that no longer exist."""
 
+from unittest.mock import patch
+
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.device_linker.const import (
@@ -10,6 +12,7 @@ from custom_components.device_linker.const import (
 )
 from custom_components.device_linker.manager import async_remember_unlinked
 from custom_components.device_linker.matching import pair_key
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from tests.ha.test_config_flow import _add_link, _devices, _setup_hub
 
@@ -55,13 +58,15 @@ async def test_a_mac_left_by_an_untracked_old_link_can_be_removed(hass) -> None:
     key = next(k for k in schema if str(k) == "leftovers")
     labels = {o["value"]: o["label"] for o in schema[key].config["options"]}
     assert labels[f"{matter.id}|{MAC}"] == (
-        f"Leak Sensor (matter) (matter): {MAC} — also on Leak Sensor"
+        f"Leak Sensor (matter) (matter): {MAC} — also on Leak Sensor (unifi)"
     )
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input={"leftovers": [f"{matter.id}|{MAC}"]}
     )
-    assert result["type"] == "create_entry"
+    assert result["type"] == "abort"
+    assert result["reason"] == "cleaned"
+    assert result["description_placeholders"] == {"removed": "1"}
     registry = dr.async_get(hass)
     assert (dr.CONNECTION_NETWORK_MAC, MAC) not in registry.async_get(
         matter.id
@@ -107,3 +112,70 @@ async def test_addresses_a_current_link_uses_are_not_listed(hass) -> None:
     await async_remember_unlinked(hass, {pair_key(main.id, target.id)})
     result = await _open_cleanup(hass, hub)
     assert result["reason"] == "no_leftovers"
+
+
+async def test_a_devices_only_address_and_service_links_are_not_offered(hass) -> None:
+    """Home Assistant won't leave a device with nothing; services link on purpose."""
+    hub = await _setup_hub(hass)
+    registry = dr.async_get(hass)
+    esphome_config = MockConfigEntry(domain="esphome")
+    esphome_config.add_to_hass(hass)
+    unifi_config = MockConfigEntry(domain="unifi")
+    unifi_config.add_to_hass(hass)
+    # Both register only the MAC: there is nothing else on either device.
+    esphome = registry.async_get_or_create(
+        config_entry_id=esphome_config.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, MAC)},
+        name="BLE Proxy",
+    )
+    unifi = registry.async_get_or_create(
+        config_entry_id=unifi_config.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, MAC)},
+        name="BLE Proxy",
+    )
+    # A speaker shares its MAC only with a routine (a service device).
+    speaker = _device(hass, "apple_tv", "Speaker", mac="aa:bb:cc:dd:ee:61")
+    routine_config = MockConfigEntry(domain="daily_routine")
+    routine_config.add_to_hass(hass)
+    routine = registry.async_get_or_create(
+        config_entry_id=routine_config.entry_id,
+        identifiers={("daily_routine", "fan")},
+        connections={(dr.CONNECTION_NETWORK_MAC, "aa:bb:cc:dd:ee:61")},
+        name="Turn the fan on",
+        entry_type=dr.DeviceEntryType.SERVICE,
+    )
+    await async_remember_unlinked(
+        hass, {pair_key(esphome.id, unifi.id), pair_key(speaker.id, routine.id)}
+    )
+    result = await _open_cleanup(hass, hub)
+    assert result["type"] == "abort"
+    assert result["reason"] == "no_leftovers"
+
+
+async def test_one_refusal_does_not_stop_the_rest(hass) -> None:
+    """A device Home Assistant won't change is named; the others still go."""
+    hub = await _setup_hub(hass)
+    unifi = _device(hass, "unifi", "Leak Sensor", mac=MAC)
+    matter = _device(hass, "matter", "Leak Sensor (matter)", mac=MAC)
+    await async_remember_unlinked(hass, {pair_key(unifi.id, matter.id)})
+    result = await _open_cleanup(hass, hub)
+    chosen = [f"{unifi.id}|{MAC}", f"{matter.id}|{MAC}"]
+    real_update = dr.DeviceRegistry.async_update_device
+
+    def refuse_unifi(self, device_id, **kwargs):
+        if device_id == unifi.id:
+            raise HomeAssistantError("refused")
+        return real_update(self, device_id, **kwargs)
+
+    with patch.object(dr.DeviceRegistry, "async_update_device", refuse_unifi):
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], user_input={"leftovers": chosen}
+        )
+    assert result["reason"] == "cleaned_some"
+    assert result["description_placeholders"] == {
+        "removed": "1",
+        "failed": "Leak Sensor",
+    }
+    assert (dr.CONNECTION_NETWORK_MAC, MAC) not in dr.async_get(hass).async_get(
+        matter.id
+    ).connections

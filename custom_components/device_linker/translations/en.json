@@ -8,7 +8,7 @@
       },
       "discovery_join": {
         "title": "Add {device} to {link}?",
-        "description": "{device} ({integration}) matches {member}, which is already in the link {link}. Submit adds {device} to that link, so Home Assistant shows it with the other devices in it.",
+        "description": "{device} ({integration}) matches {member}, which is already in the link {link}. {why} Submit adds {device} to that link, so Home Assistant shows it with the other devices in it.",
         "data": {}
       },
       "discovery_mac": {
@@ -80,14 +80,16 @@
       },
       "cleanup": {
         "title": "Clean up leftover addresses",
-        "description": "These {count} addresses are still on a device, but no link uses them there any more, usually because the link was deleted before Device Linker kept track of which devices it changed. Each one is shown with the other devices that share it, which is why Home Assistant still shows them as linked. Choose the ones to remove. If you remove a MAC address the device's own integration registered, the integration adds it back on its next refresh, so a mistake does no harm.",
+        "description": "These {count} addresses are still on a device, but no link uses them there any more, usually because the link was deleted before Device Linker kept track of which devices it changed. Each one is shown with the other devices that share it, which is why Home Assistant still shows them as linked. An address that is all a device has, or that only a service shares (such as a routine linked to its device), isn't listed. Choose the ones to remove. If you remove a MAC address the device's own integration registered, the integration adds it back on its next refresh, so a mistake does no harm.",
         "data": {
           "leftovers": "Addresses to remove"
         }
       }
     },
     "abort": {
-      "no_leftovers": "No leftover addresses found. Every MAC address and shared ID Device Linker added is used by a current link."
+      "no_leftovers": "No leftover addresses found. Every MAC address and shared ID Device Linker added is used by a current link.",
+      "cleaned": "Removed {removed}. Home Assistant no longer shows those devices as linked through them.",
+      "cleaned_some": "Removed {removed}. Home Assistant wouldn't change {failed}, so their addresses were left as they are."
     }
   },
   "entity": {
