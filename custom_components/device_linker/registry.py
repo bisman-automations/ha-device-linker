@@ -320,11 +320,16 @@ def iter_links(
 
 
 def devices_in_links(
-    hass: HomeAssistant, *, skip_subentry_id: str | None = None
+    hass: HomeAssistant,
+    *,
+    skip_subentry_id: str | None = None,
+    multi_link: Iterable[str] = (),
 ) -> set[str]:
     """Ids of every device already in a link (main or linked).
 
     ``skip_subentry_id`` leaves out one link, the one being edited.
+    ``multi_link`` integrations' devices may be in more than one link, so
+    they're left out too.
     """
     ids: set[str] = set()
     for _hub, subentry, settings in iter_links(hass):
@@ -336,7 +341,45 @@ def devices_in_links(
         ids.update(
             d for d in settings.get(CONF_LINKED_DEVICE_IDS) or [] if isinstance(d, str)
         )
-    return ids
+    return _without_multi_link(hass, ids, multi_link)
+
+
+def _without_multi_link(
+    hass: HomeAssistant, ids: set[str], multi_link: Iterable[str]
+) -> set[str]:
+    """``ids`` without the devices of integrations that may link twice."""
+    domains = set(multi_link)
+    if not domains:
+        return ids
+    registry = async_get_device_registry(hass)
+    kept: set[str] = set()
+    for device_id in ids:
+        device = registry.async_get(device_id)
+        entry = (
+            hass.config_entries.async_get_entry(device.config_entry_id)
+            if device is not None
+            else None
+        )
+        if entry is None or entry.domain not in domains:
+            kept.add(device_id)
+    return kept
+
+
+def values_from_other_links(
+    hass: HomeAssistant, device_id: str, *, skip_subentry_id: str | None = None
+) -> set[str]:
+    """MAC addresses and shared IDs other links put on this device.
+
+    A device in more than one link carries each link's value; only the ones
+    it registered itself are offered as a link's address.
+    """
+    values: set[str] = set()
+    for _hub, subentry, settings in iter_links(hass):
+        if subentry.subentry_id == skip_subentry_id:
+            continue
+        if dict(settings.get(CONF_ADDED_CONNECTIONS) or {}).get(device_id):
+            values.add(str(settings[CONF_MAC_ADDRESS]))
+    return values
 
 
 def _all_devices(registry: DeviceRegistry) -> Iterable[DeviceEntry]:
@@ -347,7 +390,10 @@ def _all_devices(registry: DeviceRegistry) -> Iterable[DeviceEntry]:
 
 
 def linked_device_ids(
-    hass: HomeAssistant, *, skip_subentry_id: str | None = None
+    hass: HomeAssistant,
+    *,
+    skip_subentry_id: str | None = None,
+    multi_link: Iterable[str] = (),
 ) -> set[str]:
     """Ids of every device that is already linked to another device.
 
@@ -357,6 +403,8 @@ def linked_device_ids(
     link themselves to their device; that doesn't count, or a TV with a
     profile could never be linked to its network device.
     ``skip_subentry_id`` leaves out one link, the one being edited.
+    ``multi_link`` integrations' devices may be in more than one link and
+    are never counted as linked.
     """
     linked = devices_in_links(hass, skip_subentry_id=skip_subentry_id)
     holders: dict[tuple[str, str, str], set[str]] = {}
@@ -372,4 +420,4 @@ def linked_device_ids(
     for ids in holders.values():
         if len(ids) > 1:
             linked |= ids
-    return linked
+    return _without_multi_link(hass, linked, multi_link)

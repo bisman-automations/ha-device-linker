@@ -53,6 +53,8 @@ DEFAULT_PREFERRED_MAC_SOURCES = (
 # Settings: match one chip's Wi-Fi and Bluetooth addresses (suggestions only),
 # and link same-named devices with no address through a shared ID.
 CONF_MATCH_NEARBY_MACS = "match_nearby_macs"
+# Integrations whose devices may be in more than one link.
+CONF_MULTI_LINK_INTEGRATIONS = "multi_link_integrations"
 CONF_SHARED_ID_LINKS = "shared_id_links"
 # Devices never suggested or linked automatically (a settings list).
 CONF_IGNORED_DEVICES = "ignored_devices"

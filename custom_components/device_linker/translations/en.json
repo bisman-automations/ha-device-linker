@@ -104,7 +104,8 @@
           "include_services": "Include services",
           "ignored_devices": "Devices never suggested",
           "match_nearby_macs": "Match a device's Wi-Fi and Bluetooth addresses",
-          "shared_id_links": "Link same names with a shared ID"
+          "shared_id_links": "Link same names with a shared ID",
+          "multi_link_integrations": "Integrations that can be in more than one link"
         },
         "data_description": {
           "auto_link_similar": "Links names like Deck Camera and G4 Deck Camera without asking. Names that differ by a brand or a place, like Living Room TV and Living Room Apple TV, still ask first.",
@@ -114,7 +115,8 @@
           "ignored_devices": "These devices are never suggested or linked automatically. Remove a device to have it suggested again. You can still link it yourself with Add link.",
           "preferred_mac_sources": "Integrations you trust to report a device's real MAC address, most trusted first, such as UniFi. When a link has a choice, the address from the first of these is picked, its device becomes the main device, and its name names the link. The order is the order you add them: to move one, remove it and add it again.",
           "match_nearby_macs": "Suggests two devices whose addresses are one or two apart, like one ESP32 chip's Wi-Fi and Bluetooth addresses. Always a suggestion, never linked automatically.",
-          "shared_id_links": "Devices with the same name and no address at all, such as a Bluetooth device behind a hub and its Cloud copy, are linked with an ID made from the name (office-ceiling-fan). Linked automatically when automatic linking is on; otherwise the suggestion fills in the ID."
+          "shared_id_links": "Devices with the same name and no address at all, such as a Bluetooth device behind a hub and its Cloud copy, are linked with an ID made from the name (office-ceiling-fan). Linked automatically when automatic linking is on; otherwise the suggestion fills in the ID.",
+          "multi_link_integrations": "Devices from these integrations can be added to more than one link with Add link, such as one Matter device that stands for two SwitchBot curtains. Each link puts its own address on the device. Use it when another integration (like SwitchBot Cloud) has one device for each part, which can't share one link."
         }
       },
       "cleanup": {

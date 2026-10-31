@@ -49,6 +49,7 @@ from .const import (
     CONF_MATCH_HARDWARE,
     CONF_MATCH_NAMES,
     CONF_MATCH_NEARBY_MACS,
+    CONF_MULTI_LINK_INTEGRATIONS,
     CONF_ORIGIN,
     CONF_PREFERRED_MAC_SOURCES,
     CONF_SHARED_ID_LINKS,
@@ -130,6 +131,8 @@ class SuggestionSettings:
     ignored_devices: frozenset[str] = frozenset()
     # Most trusted MAC sources first. None until saved: the defaults apply.
     preferred_mac_sources: tuple[str, ...] | None = None
+    # Integrations whose devices may be added to more than one link by hand.
+    multi_link_integrations: tuple[str, ...] = ()
     dismissed: frozenset[str] = frozenset()
     unlinked: frozenset[str] = frozenset()
     announced: frozenset[str] = frozenset()
@@ -315,6 +318,7 @@ class SuggestionManager:
         preferred_sources: Iterable[str] | None = None,
         match_nearby_macs: bool | None = None,
         shared_id_links: bool | None = None,
+        multi_link_integrations: Iterable[str] | None = None,
         scan: bool = True,
     ) -> None:
         """Store new preferences and, by default, scan again."""
@@ -355,6 +359,11 @@ class SuggestionManager:
                 self._settings.shared_id_links
                 if shared_id_links is None
                 else bool(shared_id_links)
+            ),
+            multi_link_integrations=(
+                self._settings.multi_link_integrations
+                if multi_link_integrations is None
+                else _ordered_unique(multi_link_integrations)
             ),
         )
         await _save_settings(self._store, self._settings)
@@ -1264,6 +1273,11 @@ async def async_apply_suggestion_preferences(
     shared_id_links = bool(
         user_input.get(CONF_SHARED_ID_LINKS, current.shared_id_links)
     )
+    multi_link = (
+        _ordered_unique(user_input[CONF_MULTI_LINK_INTEGRATIONS])
+        if CONF_MULTI_LINK_INTEGRATIONS in user_input
+        else current.multi_link_integrations
+    )
     if manager is not None:
         await manager.async_update_settings(
             threshold=threshold,
@@ -1277,6 +1291,7 @@ async def async_apply_suggestion_preferences(
             preferred_sources=preferred_sources,
             match_nearby_macs=match_nearby_macs,
             shared_id_links=shared_id_links,
+            multi_link_integrations=multi_link,
             scan=scan,
         )
         return
@@ -1296,6 +1311,7 @@ async def async_apply_suggestion_preferences(
             preferred_mac_sources=preferred_sources,
             match_nearby_macs=match_nearby_macs,
             shared_id_links=shared_id_links,
+            multi_link_integrations=multi_link,
         ),
     )
 
@@ -1372,6 +1388,13 @@ async def _load_settings(store: Store[dict[str, Any]]) -> SuggestionSettings:
             if isinstance(stored.get("preferred_mac_sources"), list)
             else None
         ),
+        multi_link_integrations=(
+            _ordered_unique(
+                v for v in stored["multi_link_integrations"] if isinstance(v, str)
+            )
+            if isinstance(stored.get("multi_link_integrations"), list)
+            else ()
+        ),
         dismissed=_string_set(stored, "dismissed"),
         unlinked=_string_set(stored, "unlinked"),
         announced=_string_set(stored, "announced"),
@@ -1398,6 +1421,7 @@ async def _save_settings(
                 if settings.preferred_mac_sources is None
                 else list(settings.preferred_mac_sources)
             ),
+            "multi_link_integrations": list(settings.multi_link_integrations),
             "dismissed": sorted(settings.dismissed),
             "unlinked": sorted(settings.unlinked),
             "announced": sorted(settings.announced),

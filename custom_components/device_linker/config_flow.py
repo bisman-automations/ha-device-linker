@@ -41,6 +41,7 @@ from .const import (
     CONF_MATCH_HARDWARE,
     CONF_MATCH_NAMES,
     CONF_MATCH_NEARBY_MACS,
+    CONF_MULTI_LINK_INTEGRATIONS,
     CONF_NEVER_SUGGEST,
     CONF_ORIGIN,
     CONF_PREFERRED_MAC_SOURCES,
@@ -93,6 +94,7 @@ from .registry import (
     linked_device_ids,
     normalize_link_value,
     text_pairs,
+    values_from_other_links,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -381,6 +383,35 @@ def _connection_conflicts(
     return sorted(conflicts, key=str.casefold)
 
 
+def _integration_name(hass: HomeAssistant, domain: str) -> str:
+    try:
+        return f"{async_get_loaded_integration(hass, domain).name} ({domain})"
+    except LoaderError:
+        return domain
+
+
+def _integration_options(
+    hass: HomeAssistant, chosen: tuple[str, ...]
+) -> list[selector.SelectOptionDict]:
+    """Every integration that has devices, plus any already chosen."""
+    registry = dr.async_get(hass)
+    domains: set[str] = set(chosen)
+    for entry in hass.config_entries.async_entries():
+        if entry.domain == DOMAIN or entry.domain in domains:
+            continue
+        if dr.async_entries_for_config_entry(registry, entry.entry_id):
+            domains.add(entry.domain)
+    return sorted(
+        (
+            selector.SelectOptionDict(
+                value=domain, label=_integration_name(hass, domain)
+            )
+            for domain in domains
+        ),
+        key=lambda option: option["label"].casefold(),
+    )
+
+
 def _mac_source_options(
     hass: HomeAssistant, chosen: tuple[str, ...]
 ) -> list[selector.SelectOptionDict]:
@@ -459,6 +490,19 @@ def _suggestion_schema(
         )
     tail: dict[vol.Marker, object] = {}
     if hass is not None:
+        tail[
+            vol.Optional(
+                CONF_MULTI_LINK_INTEGRATIONS,
+                default=list(settings.multi_link_integrations),
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=_integration_options(hass, settings.multi_link_integrations),
+                multiple=True,
+                custom_value=True,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
         tail[
             vol.Optional(CONF_IGNORED_DEVICES, default=sorted(settings.ignored_devices))
         ] = selector.SelectSelector(
@@ -890,7 +934,11 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             if self._get_entry().subentries
             else []
         )
-        include_services = (await async_load_settings(self.hass)).include_services
+        settings = await async_load_settings(self.hass)
+        include_services = settings.include_services
+        in_links = devices_in_links(
+            self.hass, multi_link=settings.multi_link_integrations
+        )
         options = [
             selector.SelectOptionDict(value=MANUAL_ENTRY, label="Manual MAC entry"),
             *joinable,
@@ -899,7 +947,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 include_mac=True,
                 # A device linked only by Home Assistant can share its MAC
                 # with more devices, so it can be the main device.
-                exclude_device_ids=devices_in_links(self.hass),
+                exclude_device_ids=in_links,
                 include_services=include_services,
             ),
         ]
@@ -919,9 +967,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             ),
             errors=errors,
             description_placeholders={
-                "hidden": _hidden_note(
-                    self.hass, include_services, hidden=devices_in_links(self.hass)
-                )
+                "hidden": _hidden_note(self.hass, include_services, hidden=in_links)
             },
         )
 
@@ -1033,14 +1079,15 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                     return self.async_abort(reason="joined")
 
         # Devices not linked to anything, from integrations not in the link yet.
+        settings = await async_load_settings(self.hass)
         options = [
             option
             for option in _device_options(
                 self.hass,
-                include_services=(
-                    await async_load_settings(self.hass)
-                ).include_services,
-                exclude_device_ids=linked_device_ids(self.hass),
+                include_services=settings.include_services,
+                exclude_device_ids=linked_device_ids(
+                    self.hass, multi_link=settings.multi_link_integrations
+                ),
             )
             if (device := get_device(registry, option["value"])) is not None
             and device.config_entry_id not in member_entries
@@ -1094,12 +1141,15 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 self._linked_device_ids = linked_ids
                 return await self.async_step_confirm()
 
+        settings = await async_load_settings(self.hass)
         options = _device_options(
             self.hass,
-            include_services=(await async_load_settings(self.hass)).include_services,
+            include_services=settings.include_services,
             exclude_device_id=self._main_device_id,
             exclude_config_entry_id=main.config_entry_id if main else None,
-            exclude_device_ids=linked_device_ids(self.hass),
+            exclude_device_ids=linked_device_ids(
+                self.hass, multi_link=settings.multi_link_integrations
+            ),
         )
         if not options:
             return self.async_abort(reason="no_devices")
@@ -1117,8 +1167,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 "already_linked": already_names,
                 "hidden": _hidden_note(
                     self.hass,
-                    (await async_load_settings(self.hass)).include_services,
+                    settings.include_services,
                     skip_device_id=self._main_device_id,
+                    multi_link=settings.multi_link_integrations,
                 ),
             },
         )
@@ -1174,7 +1225,12 @@ class LinkSubentryFlow(ConfigSubentryFlow):
 
         ordered, preselect = _rank_macs(
             self.hass,
-            _network_macs(main),
+            [
+                mac
+                for mac in _network_macs(main)
+                if main is None
+                or mac not in values_from_other_links(self.hass, main.id)
+            ],
             (main,),
             preferred_mac_sources(await async_load_settings(self.hass)),
         )
@@ -1218,23 +1274,29 @@ class LinkSubentryFlow(ConfigSubentryFlow):
         old_mac = str(old[CONF_MAC_ADDRESS])
         old_added = dict(old[CONF_ADDED_CONNECTIONS])
         copied = {d for d in old_ids if old_added.get(d)}
+        settings = await async_load_settings(self.hass)
         options = _device_options(
             self.hass,
-            include_services=(await async_load_settings(self.hass)).include_services,
+            include_services=settings.include_services,
             # Its own devices stay listed; devices linked elsewhere don't.
             exclude_device_ids=linked_device_ids(
-                self.hass, skip_subentry_id=subentry.subentry_id
+                self.hass,
+                skip_subentry_id=subentry.subentry_id,
+                multi_link=settings.multi_link_integrations,
             )
             - {old_main_id, *old_ids},
         )
         available = {option["value"] for option in options}
 
         def own_macs(device: dr.DeviceEntry) -> list[str]:
-            """MAC addresses a device registered itself (not ones this link copied)."""
+            """MAC addresses a device registered itself (not ones a link copied)."""
+            others = values_from_other_links(
+                self.hass, device.id, skip_subentry_id=subentry.subentry_id
+            )
             return [
                 mac
                 for mac in _network_macs(device)
-                if not (device.id in copied and mac == old_mac)
+                if not (device.id in copied and mac == old_mac) and mac not in others
             ]
 
         errors: dict[str, str] = {}
@@ -1425,6 +1487,7 @@ def _hidden_note(
     *,
     skip_device_id: str | None = None,
     hidden: set[str] | None = None,
+    multi_link: tuple[str, ...] = (),
 ) -> str:
     """Name the devices left out because they're already linked.
 
@@ -1435,7 +1498,7 @@ def _hidden_note(
     hidden_ids = {
         option["value"]
         for option in _device_options(hass, include_services=include_services)
-    } & (linked_device_ids(hass) if hidden is None else hidden)
+    } & (linked_device_ids(hass, multi_link=multi_link) if hidden is None else hidden)
     hidden_ids.discard(skip_device_id)
     if not hidden_ids:
         return ""

@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2026-10-31
+
+### Added
+
+- **Integrations that can be in more than one link** (Matching settings). Devices from the integrations you choose here can go into more than one link with **Add link**. Use it when one integration has a single device for something that another integration splits into parts. For example, a Matter device for a pair of SwitchBot curtains can be in the right curtain's link and the left curtain's link. Each link puts its own address on the device, and deleting one link removes only that link's address.
+
 ## [2.11.1] - 2026-10-31
 
 ### Fixed
@@ -244,6 +250,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.12.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.11.1...v2.12.0
 [2.11.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.11.0...v2.11.1
 [2.11.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.9.0...v2.10.0
