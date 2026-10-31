@@ -45,7 +45,13 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 import re
 
-from .const import MAX_AUTO_LINK_GROUP, REASON_IDENTIFIER, REASON_MAC, REASON_NAME
+from .const import (
+    MAX_AUTO_LINK_GROUP,
+    REASON_IDENTIFIER,
+    REASON_MAC,
+    REASON_NAME,
+    REASON_NEARBY_MAC,
+)
 
 # Connection type strings. Duplicated here so this module stays free of
 # Home Assistant imports; they match device_registry.CONNECTION_*.
@@ -174,7 +180,18 @@ _CONNECTION_TOKENS = frozenset(
 # Short forms that mean the same word in :func:`names_contained`.
 _SHORT_FORMS = {"cam": "camera", "temp": "temperature", "tv": "television"}
 
-_REASON_RANK = {REASON_MAC: 0, REASON_IDENTIFIER: 1, REASON_NAME: 2}
+# A name match outranks a nearby address, so an exact name still links on
+# its own; the nearby address only shows when nothing else matched.
+_REASON_RANK = {
+    REASON_MAC: 0,
+    REASON_IDENTIFIER: 1,
+    REASON_NAME: 2,
+    REASON_NEARBY_MAC: 3,
+}
+# A nearby address is a strong hint, not proof: it's always only suggested.
+NEARBY_MAC_SCORE = 0.9
+# How far apart one chip's addresses can be (ESP32: Wi-Fi, +1 AP, +2 BT, +3).
+NEARBY_MAC_SPAN = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -454,6 +471,18 @@ _BEST_FUZZY_SCORE = 0.99
 _ONE_BRAND_SCORE = 0.9
 
 
+def shared_id_for(name: str) -> str:
+    """An ID made from a device's name, for devices with no address.
+
+    "Office Ceiling Fan (BLE)" becomes ``office-ceiling-fan``: lower case, no
+    connection tag, words joined with hyphens. Its BLE and Cloud copies get
+    the same ID.
+    """
+    return "-".join(
+        token for token in fold_name(name).split() if token not in _CONNECTION_TOKENS
+    )
+
+
 def _core_name(folded: str, area_name: str | None) -> str:
     """A folded name without its area words and connection tags."""
     ignored = area_tokens(area_name)
@@ -503,6 +532,7 @@ def suggest(
     match_names: bool = True,
     copied_macs: set[tuple[str, str]] | None = None,
     preferred_integrations: Sequence[str] = (),
+    match_nearby_macs: bool = True,
 ) -> list[Suggestion]:
     """Return suggestions, best first.
 
@@ -546,6 +576,16 @@ def suggest(
                         ),
                     )
 
+    if match_hardware and match_nearby_macs:
+        _match_nearby_macs(
+            eligible,
+            best,
+            linked_pairs=linked_pairs,
+            dismissed=dismissed,
+            copied_macs=copied,
+            preferred=tuple(preferred_integrations),
+        )
+
     if match_names:
         _match_names(
             eligible,
@@ -558,6 +598,86 @@ def suggest(
         )
 
     return sorted(best.values(), key=_sort_key)
+
+
+def _device_addresses(
+    device: DeviceView, copied_macs: set[tuple[str, str]]
+) -> dict[str, bool]:
+    """The device's own Wi-Fi and Bluetooth addresses: ``{mac: is_network}``."""
+    found: dict[str, bool] = {}
+    for kind, value in device.connections:
+        if kind not in {CONNECTION_NETWORK_MAC, CONNECTION_BLUETOOTH}:
+            continue
+        mac = normalize_mac(value)
+        if mac is None or (device.device_id, mac) in copied_macs:
+            continue
+        found[mac] = found.get(mac, False) or kind == CONNECTION_NETWORK_MAC
+    return found
+
+
+def _match_nearby_macs(
+    devices: Sequence[DeviceView],
+    best: dict[str, Suggestion],
+    *,
+    linked_pairs: set[str],
+    dismissed: set[str],
+    copied_macs: set[tuple[str, str]],
+    preferred: tuple[str, ...],
+) -> None:
+    """Suggest devices whose addresses are one chip's Wi-Fi and Bluetooth.
+
+    The first five bytes match and the last differs by 1 to
+    :data:`NEARBY_MAC_SPAN`, which is how ESP32 chips number their Wi-Fi and
+    Bluetooth radios. It's a suggestion, never an automatic link. The shared
+    address is a network MAC, from the most trusted integration when both
+    devices have one.
+    """
+    by_prefix: dict[str, list[tuple[DeviceView, str, int, bool]]] = {}
+    for device in devices:
+        for mac, is_network in _device_addresses(device, copied_macs).items():
+            prefix, _, last = mac.rpartition(":")
+            by_prefix.setdefault(prefix, []).append(
+                (device, mac, int(last, 16), is_network)
+            )
+    for holders in by_prefix.values():
+        if len(holders) < 2:
+            continue
+        for index, (left, left_mac, left_last, left_net) in enumerate(holders):
+            for right, right_mac, right_last, right_net in holders[index + 1 :]:
+                if left.device_id == right.device_id:
+                    continue
+                if not 1 <= abs(left_last - right_last) <= NEARBY_MAC_SPAN:
+                    continue
+                if not _pair_allowed(left, right, linked_pairs, dismissed):
+                    continue
+                if _already_share_connection(left, right):
+                    continue
+                choices = [
+                    (integration_rank(device.integration, preferred), device, mac)
+                    for device, mac, is_network in (
+                        (left, left_mac, left_net),
+                        (right, right_mac, right_net),
+                    )
+                    if is_network
+                ]
+                if not choices:
+                    continue
+                choices.sort(key=lambda choice: choice[0])
+                if len(choices) == 2 and choices[0][0] == choices[1][0]:
+                    anchor_id, mac = None, None
+                else:
+                    anchor_id, mac = choices[0][1].device_id, choices[0][2]
+                _consider(
+                    best,
+                    _suggestion(
+                        left,
+                        right,
+                        reason=REASON_NEARBY_MAC,
+                        score=NEARBY_MAC_SCORE,
+                        mac=mac,
+                        anchor_device_id=anchor_id,
+                    ),
+                )
 
 
 def _match_names(
@@ -970,6 +1090,13 @@ def _auto_eligible(
         if names_contained(item.name_a, item.name_b, area):
             return True
     return not unassigned and item.shared_tokens >= 2
+
+
+def auto_eligible(
+    item: Suggestion, threshold: float, *, similar_names: bool = False
+) -> bool:
+    """Whether a match is strong enough to link without asking."""
+    return _auto_eligible(item, threshold, similar_names=similar_names)
 
 
 def _bucket_rank(items: Sequence[Suggestion]) -> tuple[int, float, str, str]:

@@ -50,6 +50,10 @@ DEFAULT_PREFERRED_MAC_SOURCES = (
     "mikrotik",
     "nmap_tracker",
 )
+# Settings: match one chip's Wi-Fi and Bluetooth addresses (suggestions only),
+# and link same-named devices with no address through a shared ID.
+CONF_MATCH_NEARBY_MACS = "match_nearby_macs"
+CONF_SHARED_ID_LINKS = "shared_id_links"
 # Devices never suggested or linked automatically (a settings list).
 CONF_IGNORED_DEVICES = "ignored_devices"
 # On a suggestion: don't link, and add these devices to that list.
@@ -107,3 +111,6 @@ STORAGE_VERSION = 1
 REASON_MAC = "mac"
 REASON_IDENTIFIER = "identifier"
 REASON_NAME = "name"
+# Two addresses one or two apart from one maker: one chip's Wi-Fi and
+# Bluetooth addresses (ESP32 uses its Wi-Fi address plus 2 for Bluetooth).
+REASON_NEARBY_MAC = "nearby_mac"

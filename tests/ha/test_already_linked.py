@@ -278,3 +278,47 @@ async def test_same_named_devices_join_a_group_home_assistant_linked(hass) -> No
     # The ESPHome lamp already has the address; it isn't added to the link.
     assert esphome.id not in link.settings["linked_device_ids"]
     assert async_get_manager(hass).suggestions == []
+
+
+async def test_same_names_with_no_address_link_through_a_shared_id(hass) -> None:
+    """A fan behind a Bluetooth hub and its Cloud copy share an ID from the name."""
+    await _setup_hub(hass)
+    ble = _register(
+        hass, domain="switchbot", name="Office Ceiling Fan (BLE)", area="Office"
+    )
+    cloud = _register(
+        hass, domain="switchbot_cloud", name="Office Ceiling Fan (Cloud)", area="Office"
+    )
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+    (link,) = links(hass)
+    assert link.settings["mac_address"] == "office-ceiling-fan"
+    assert link.settings["main_device_id"] is None
+    assert set(link.settings["linked_device_ids"]) == {ble.id, cloud.id}
+    assert link.title == "Office Ceiling Fan (2 Devices Linked)"
+    registry = dr.async_get(hass)
+    for device in (ble, cloud):
+        assert ("device_linker", "office-ceiling-fan") in registry.async_get(
+            device.id
+        ).identifiers
+
+
+async def test_without_automatic_links_the_suggestion_fills_in_the_id(hass) -> None:
+    await _setup_hub(hass)
+    await _disable_auto_link(hass)
+    ble = _register(
+        hass, domain="switchbot", name="Office Ceiling Fan (BLE)", area="Office"
+    )
+    cloud = _register(
+        hass, domain="switchbot_cloud", name="Office Ceiling Fan (Cloud)", area="Office"
+    )
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+    assert links(hass) == []
+    flow = next(
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"].get("unique_id") == suggestion_unique_id(ble.id, cloud.id)
+    )
+    result = await hass.config_entries.flow.async_configure(flow["flow_id"])
+    assert result["data_schema"]({})["mac_address"] == "office-ceiling-fan"

@@ -941,3 +941,55 @@ def test_different_kinds_of_device_and_a_possessive_do_not_match() -> None:
         )
         == 1
     )
+
+
+def test_one_chips_wifi_and_bluetooth_addresses_are_suggested() -> None:
+    """ESP32: Wi-Fi ...88, Bluetooth ...8a. A suggestion, never automatic."""
+    unifi = _device(
+        "u",
+        name="Office Lights",
+        integration="unifi",
+        config_entry_id="e1",
+        connections=(("mac", "dc:06:75:a7:f7:88"),),
+    )
+    hub = _device(
+        "h",
+        name="Office Relay Hub",
+        integration="switchbot",
+        config_entry_id="e2",
+        connections=(("mac", "dc:06:75:a7:f7:8a"), ("bluetooth", "DC:06:75:A7:F7:8A")),
+    )
+    far = _device(
+        "f",
+        name="Office Plug",
+        integration="esphome",
+        config_entry_id="e3",
+        connections=(("mac", "dc:06:75:a7:f7:90"),),
+    )
+    found = matching.suggest(
+        [unifi, hub, far],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        preferred_integrations=("unifi",),
+    )
+    assert [(item.reason, {item.device_id_a, item.device_id_b}) for item in found] == [
+        ("nearby_mac", {"u", "h"})
+    ]
+    (item,) = found
+    assert item.anchor_device_id == "u"
+    assert item.mac == "dc:06:75:a7:f7:88"
+    assert matching.plan_auto_links(found, enabled=True, threshold=0.8) == []
+    off = matching.suggest(
+        [unifi, hub],
+        linked_pairs=set(),
+        dismissed=set(),
+        threshold=0.8,
+        match_nearby_macs=False,
+    )
+    assert off == []
+
+
+def test_a_shared_id_comes_from_the_name() -> None:
+    assert matching.shared_id_for("Office Ceiling Fan (BLE)") == "office-ceiling-fan"
+    assert matching.shared_id_for("Office Ceiling Fan (Cloud)") == "office-ceiling-fan"

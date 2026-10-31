@@ -424,3 +424,31 @@ async def test_a_link_is_named_after_its_most_trusted_device(hass) -> None:
     await hass.async_block_till_done()
     (link,) = links(hass)
     assert link.title == "Den Hub (2 Devices Linked)"
+
+
+async def test_two_devices_of_one_entry_are_named_in_the_refusal(hass) -> None:
+    """Two Cloud devices of one account can't share a link's address."""
+    (main,) = _devices(hass, ("unifi", "Office Lights", "AA:BB:CC:DD:EE:80"))
+    cloud = MockConfigEntry(domain="switchbot_cloud")
+    cloud.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    fan, lights = (
+        registry.async_get_or_create(
+            config_entry_id=cloud.entry_id,
+            identifiers={("switchbot_cloud", name)},
+            name=name,
+        )
+        for name in ("Office Ceiling Fan (Cloud)", "Office Ceiling Fan Lights (Cloud)")
+    )
+    hub = await _setup_hub(hass)
+    result = await _add_link(hass, hub)
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: main.id}
+    )
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], user_input={CONF_LINKED_DEVICE_IDS: [fan.id, lights.id]}
+    )
+    assert result["errors"] == {"base": "same_config_entry"}
+    assert result["description_placeholders"]["same_entry"] == (
+        "Office Ceiling Fan (Cloud) and Office Ceiling Fan Lights (Cloud)"
+    )

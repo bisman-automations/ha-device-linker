@@ -48,8 +48,10 @@ from .const import (
     CONF_MAIN_DEVICE_ID,
     CONF_MATCH_HARDWARE,
     CONF_MATCH_NAMES,
+    CONF_MATCH_NEARBY_MACS,
     CONF_ORIGIN,
     CONF_PREFERRED_MAC_SOURCES,
+    CONF_SHARED_ID_LINKS,
     CONF_SUGGESTION_THRESHOLD,
     DATA_MANAGER,
     DEFAULT_AUTO_LINK_THRESHOLD,
@@ -61,6 +63,7 @@ from .const import (
     MAX_LISTED_SUGGESTIONS,
     ORIGIN_AUTO,
     ORIGIN_MANUAL,
+    REASON_NAME,
     SERVICE_RESCAN,
     SERVICE_RESET,
     STORAGE_KEY,
@@ -74,22 +77,26 @@ from .matching import (
     AutoLinkPlan,
     DeviceView,
     Suggestion,
+    auto_eligible,
     choose_link_ends,
     integration_rank,
     pair_key,
     pairs_among,
     plan_auto_links,
+    shared_id_for,
     suggest,
     suggestion_unique_id,
 )
 from .registry import (
     get_device,
     hub_entry,
+    is_mac,
     is_service,
     iter_links,
     link_title,
     link_unique_id,
     linked_device_ids,
+    normalize_link_value,
     retitle_links,
     text_pairs,
 )
@@ -114,6 +121,10 @@ class SuggestionSettings:
     auto_link_threshold: float = DEFAULT_AUTO_LINK_THRESHOLD
     auto_link_similar: bool = True
     include_services: bool = False
+    # One chip's Wi-Fi and Bluetooth addresses are suggested together.
+    match_nearby_macs: bool = True
+    # Same-named devices with no address are linked through a shared ID.
+    shared_id_links: bool = True
     # Devices never suggested or linked automatically, until taken off the
     # list in the settings.
     ignored_devices: frozenset[str] = frozenset()
@@ -254,6 +265,7 @@ class SuggestionManager:
             match_names=self._settings.match_names,
             copied_macs=_copied_macs(self.hass),
             preferred_integrations=preferred_mac_sources(self._settings),
+            match_nearby_macs=self._settings.match_nearby_macs,
         )
         # A device already linked to another device isn't offered for a new
         # link. A device that isn't linked yet and matches one already in a
@@ -268,6 +280,10 @@ class SuggestionManager:
             similar_names=self._settings.auto_link_similar,
         )
         linked_keys = await self._async_apply_plans(plans)
+        if self._settings.auto_link and self._settings.shared_id_links:
+            linked_keys |= await self._async_link_shared_ids(
+                [item for item in auto if item.key not in linked_keys]
+            )
         self._suggestions = [item for item in matches if item.key not in linked_keys]
         self._last_scan = dt_util.utcnow()
         _LOGGER.debug(
@@ -297,6 +313,8 @@ class SuggestionManager:
         include_services: bool | None = None,
         ignored_devices: Iterable[str] | None = None,
         preferred_sources: Iterable[str] | None = None,
+        match_nearby_macs: bool | None = None,
+        shared_id_links: bool | None = None,
         scan: bool = True,
     ) -> None:
         """Store new preferences and, by default, scan again."""
@@ -327,6 +345,16 @@ class SuggestionManager:
                 self._settings.preferred_mac_sources
                 if preferred_sources is None
                 else _ordered_unique(preferred_sources)
+            ),
+            match_nearby_macs=(
+                self._settings.match_nearby_macs
+                if match_nearby_macs is None
+                else bool(match_nearby_macs)
+            ),
+            shared_id_links=(
+                self._settings.shared_id_links
+                if shared_id_links is None
+                else bool(shared_id_links)
             ),
         )
         await _save_settings(self._store, self._settings)
@@ -501,6 +529,94 @@ class SuggestionManager:
         if sensor is None or sensor.hass is None:
             return
         sensor.async_write_ha_state()
+
+    async def _async_link_shared_ids(self, matches: list[Suggestion]) -> set[str]:
+        """Link same-named devices that have no address, through a shared ID.
+
+        "Office Ceiling Fan (BLE)" and "Office Ceiling Fan (Cloud)" have no MAC
+        address between them, so they share ``office-ceiling-fan`` instead.
+        Only the same name counts (as for any automatic name link), and only
+        when neither device has a Wi-Fi or Bluetooth address. A link already
+        using that ID takes the new devices. Returns the pair keys linked.
+        """
+        hub = hub_entry(self.hass)
+        if hub is None:
+            return set()
+        registry = dr.async_get(self.hass)
+        groups: dict[str, list[Suggestion]] = {}
+        for item in matches:
+            if (
+                item.reason != REASON_NAME
+                or not item.exact
+                or item.mac
+                or item.anchor_device_id
+                or item.join_link_id
+                or not auto_eligible(
+                    item,
+                    self._settings.auto_link_threshold,
+                    similar_names=self._settings.auto_link_similar,
+                )
+            ):
+                continue
+            devices = [
+                get_device(registry, item.device_id_a),
+                get_device(registry, item.device_id_b),
+            ]
+            if any(device is None or has_address(device) for device in devices):
+                continue
+            value = normalize_link_value(shared_id_for(item.name_a))
+            if value is None or is_mac(value):
+                continue
+            groups.setdefault(value, []).append(item)
+        linked: set[str] = set()
+        links = {
+            str(settings[CONF_MAC_ADDRESS]): (subentry, settings)
+            for _hub, subentry, settings in iter_links(self.hass)
+        }
+        for value, items in groups.items():
+            existing = links.get(value)
+            ids: list[str] = []
+            added: dict[str, bool] = {}
+            confirmed = False
+            if existing is not None:
+                settings = existing[1]
+                ids = [
+                    d
+                    for d in settings[CONF_LINKED_DEVICE_IDS] or []
+                    if isinstance(d, str)
+                ]
+                added = dict(settings[CONF_ADDED_CONNECTIONS])
+                confirmed = bool(settings[CONF_CONFIRMED])
+            entries = {
+                device.config_entry_id
+                for device in (get_device(registry, d) for d in ids)
+                if device is not None
+            }
+            for item in items:
+                for device_id in (item.device_id_a, item.device_id_b):
+                    device = get_device(registry, device_id)
+                    if (
+                        device is None
+                        or device_id in ids
+                        or device.config_entry_id in entries
+                    ):
+                        continue
+                    ids.append(device_id)
+                    added[device_id] = True
+                    entries.add(device.config_entry_id)
+                linked.add(item.key)
+            if len(ids) < 2:
+                continue
+            _LOGGER.info("Linked %s devices through the shared ID %s", len(ids), value)
+            save_link(
+                self.hass,
+                hub,
+                existing[0] if existing is not None else None,
+                link_payload(None, ids, value, added, ORIGIN_AUTO, confirmed),
+                link_title(value, len(ids)),
+                link_unique_id(None, value),
+            )
+        return linked
 
     async def _async_apply_plans(self, plans: list[AutoLinkPlan]) -> set[str]:
         """Create or extend one entry per plan. Return the pair keys now linked."""
@@ -790,6 +906,14 @@ def _for_links(
             )
         )
     return shown, auto
+
+
+def has_address(device: dr.DeviceEntry) -> bool:
+    """Whether a device has its own Wi-Fi or Bluetooth address."""
+    return any(
+        kind in {dr.CONNECTION_NETWORK_MAC, dr.CONNECTION_BLUETOOTH}
+        for kind, _value in text_pairs(device.connections)
+    )
 
 
 def _domain_of(hass: HomeAssistant, device: dr.DeviceEntry) -> str:
@@ -1134,6 +1258,12 @@ async def async_apply_suggestion_preferences(
         if CONF_PREFERRED_MAC_SOURCES in user_input
         else current.preferred_mac_sources
     )
+    match_nearby_macs = bool(
+        user_input.get(CONF_MATCH_NEARBY_MACS, current.match_nearby_macs)
+    )
+    shared_id_links = bool(
+        user_input.get(CONF_SHARED_ID_LINKS, current.shared_id_links)
+    )
     if manager is not None:
         await manager.async_update_settings(
             threshold=threshold,
@@ -1145,6 +1275,8 @@ async def async_apply_suggestion_preferences(
             include_services=include_services,
             ignored_devices=ignored_devices,
             preferred_sources=preferred_sources,
+            match_nearby_macs=match_nearby_macs,
+            shared_id_links=shared_id_links,
             scan=scan,
         )
         return
@@ -1162,6 +1294,8 @@ async def async_apply_suggestion_preferences(
             include_services=include_services,
             ignored_devices=ignored_devices,
             preferred_mac_sources=preferred_sources,
+            match_nearby_macs=match_nearby_macs,
+            shared_id_links=shared_id_links,
         ),
     )
 
@@ -1231,6 +1365,8 @@ async def _load_settings(store: Store[dict[str, Any]]) -> SuggestionSettings:
         auto_link_similar=bool(stored.get("auto_link_similar", True)),
         include_services=bool(stored.get("include_services", False)),
         ignored_devices=_string_set(stored, "ignored_devices"),
+        match_nearby_macs=bool(stored.get("match_nearby_macs", True)),
+        shared_id_links=bool(stored.get("shared_id_links", True)),
         preferred_mac_sources=(
             tuple(v for v in stored["preferred_mac_sources"] if isinstance(v, str))
             if isinstance(stored.get("preferred_mac_sources"), list)
@@ -1255,6 +1391,8 @@ async def _save_settings(
             "auto_link_similar": settings.auto_link_similar,
             "include_services": settings.include_services,
             "ignored_devices": sorted(settings.ignored_devices),
+            "match_nearby_macs": settings.match_nearby_macs,
+            "shared_id_links": settings.shared_id_links,
             "preferred_mac_sources": (
                 None
                 if settings.preferred_mac_sources is None

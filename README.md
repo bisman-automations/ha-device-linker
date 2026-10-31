@@ -114,6 +114,12 @@ The **Suggestions** sensor on the Device Linker device shows how many suggestion
 
 **Preferred MAC address sources** (in **Matching settings**) lists the integrations you trust to report a device's real MAC address, most trusted first. Out of the box that's network integrations such as UniFi. When a link has a choice of addresses, the one from the first integration on the list is picked: in suggestions, in **Add link**, and when two devices in an automatic match each have an address. That device becomes the main device and names the link. The order is the order you add them; to move one, remove it and add it again.
 
+**Devices with no address.** Some devices never report a MAC address: a SwitchBot Cloud device, or a Bluetooth device reached through a hub, such as each channel of a relay switch. When two of them have the same name apart from a tag like "(BLE)" or "(Cloud)", Device Linker links them with an ID made from the name, such as `office-ceiling-fan`. That happens automatically when automatic linking is on; otherwise the suggestion fills in the ID. Turn it off with **Link same names with a shared ID** in **Matching settings**.
+
+**One chip, two addresses.** ESP32-based devices use one address for Wi-Fi and the next one or two for Bluetooth, so UniFi might see `…:88` while the device's own integration reports `…:8A`. Device Linker suggests those devices together, using the address from your most trusted MAC source. It's always a suggestion, never linked automatically. Turn it off with **Match a device's Wi-Fi and Bluetooth addresses**.
+
+**One integration, one device per link.** Home Assistant won't let two devices of the same integration entry share an address or ID, so two Cloud devices from one account can't be in the same link. **Add link** and **Edit link** name the devices when that happens; put each in its own link.
+
 **Confirmed links.** Each link has a **Confirmed** tickbox in **Edit link**. Device Linker never changes a confirmed link on its own, and you can't remove its devices or switch its address until you untick it. Links you make yourself start confirmed; automatic links don't. Tick it on an automatic link you want to keep as it is.
 
 **Recheck automatic links**, under **Configure**, lists the devices in automatic links that today's matching rules and your settings wouldn't link, for example after you raise the similarity settings. Nothing is ticked. Take out the ones you choose; each is remembered as unlinked so it isn't linked again. Confirmed links and links you made are never listed.

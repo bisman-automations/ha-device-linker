@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] - 2026-10-30
+
+### Added
+
+- **Devices with no address link through a shared ID.** When two devices have the same name apart from a tag like "(BLE)" or "(Cloud)", and neither has any address, they're linked with an ID made from the name, such as `office-ceiling-fan`. This covers SwitchBot Cloud devices and Bluetooth devices reached through a hub, like each channel of a relay switch. It happens automatically when automatic linking is on; otherwise the suggestion fills in the ID. A new **Link same names with a shared ID** setting turns it off.
+- **One chip's Wi-Fi and Bluetooth addresses are suggested together.** ESP32-based devices use one address for Wi-Fi and the next one or two for Bluetooth, so UniFi and the device's own integration see different addresses. Devices whose addresses are that close are now suggested together, using the address from your most trusted MAC source. They're never linked automatically. A new **Match a device's Wi-Fi and Bluetooth addresses** setting turns it off.
+
+### Changed
+
+- **A clearer message when two devices can't share a link.** Home Assistant won't let two devices of one integration entry share an address or ID, such as two Cloud devices from one account. **Add link**, **Add devices to an existing link** and **Edit link** now name those devices and suggest putting them in separate links.
+
 ## [2.10.0] - 2026-10-30
 
 ### Added
@@ -227,6 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.11.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.7.1...v2.8.0

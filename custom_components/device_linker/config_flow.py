@@ -40,10 +40,12 @@ from .const import (
     CONF_MAIN_DEVICE_ID,
     CONF_MATCH_HARDWARE,
     CONF_MATCH_NAMES,
+    CONF_MATCH_NEARBY_MACS,
     CONF_NEVER_SUGGEST,
     CONF_ORIGIN,
     CONF_PREFERRED_MAC_SOURCES,
     CONF_SELECTED_MAC_ADDRESS,
+    CONF_SHARED_ID_LINKS,
     CONF_SUGGESTION_THRESHOLD,
     CONFIG_VERSION,
     DOMAIN,
@@ -53,6 +55,7 @@ from .const import (
     REASON_IDENTIFIER,
     REASON_MAC,
     REASON_NAME,
+    REASON_NEARBY_MAC,
     SUBENTRY_LINK,
     SUGGESTION_THRESHOLD_MAX,
     SUGGESTION_THRESHOLD_MIN,
@@ -64,6 +67,7 @@ from .manager import (
     async_load_settings,
     device_views,
     find_link,
+    has_address,
     link_payload,
     may_join,
     may_link,
@@ -71,7 +75,7 @@ from .manager import (
     preferred_mac_sources,
     save_link,
 )
-from .matching import integration_rank, normalize_mac
+from .matching import integration_rank, normalize_mac, shared_id_for
 from .recheck import find_mismatches, unlink_mismatches
 from .registry import (
     already_linked,
@@ -267,6 +271,7 @@ def _mac_schema(
     *,
     required: bool = True,
     preselect: str | None = None,
+    suggested_id: str | None = None,
 ) -> dict:
     """MAC fields: discovered choices plus a manual override.
 
@@ -303,6 +308,9 @@ def _mac_schema(
         schema[vol.Required(CONF_MAC_ADDRESS, default=current)] = str
     elif required:
         schema[vol.Required(CONF_MAC_ADDRESS)] = str
+    elif suggested_id:
+        # Neither device has an address: offer an ID made from the name.
+        schema[vol.Optional(CONF_MAC_ADDRESS, default=suggested_id)] = str
     else:
         # A suggestion can be declined with "never suggest" and no address.
         schema[vol.Optional(CONF_MAC_ADDRESS)] = str
@@ -483,6 +491,12 @@ def _suggestion_schema(
         vol.Optional(CONF_MATCH_NAMES, default=settings.match_names): (
             selector.BooleanSelector()
         ),
+        vol.Optional(CONF_MATCH_NEARBY_MACS, default=settings.match_nearby_macs): (
+            selector.BooleanSelector()
+        ),
+        vol.Optional(CONF_SHARED_ID_LINKS, default=settings.shared_id_links): (
+            selector.BooleanSelector()
+        ),
         **tail,
     }
 
@@ -563,6 +577,8 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_discovery_mac()
         if reason == REASON_IDENTIFIER:
             return await self.async_step_discovery_identifier()
+        if reason == REASON_NEARBY_MAC:
+            return await self.async_step_discovery_nearby_mac()
         return await self.async_step_discovery_name()
 
     async def _async_never_suggest(
@@ -676,6 +692,12 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Confirm a hardware-identifier match."""
         return await self._async_discovery_confirm(REASON_IDENTIFIER, user_input)
 
+    async def async_step_discovery_nearby_mac(
+        self, user_input: dict[str, Any] | None = None
+    ):
+        """Confirm two addresses of one chip (Wi-Fi and Bluetooth)."""
+        return await self._async_discovery_confirm(REASON_NEARBY_MAC, user_input)
+
     async def async_step_discovery_name(self, user_input: dict[str, Any] | None = None):
         """Confirm a name match."""
         return await self._async_discovery_confirm(REASON_NAME, user_input)
@@ -748,11 +770,17 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _add_link_to_hub(self.hass, hub, payload)
                 return self.async_abort(reason="linked")
 
+        settings = await async_load_settings(self.hass)
         ordered, preselect = _rank_macs(
-            self.hass,
-            discovered,
-            (device_a, device_b),
-            preferred_mac_sources(await async_load_settings(self.hass)),
+            self.hass, discovered, (device_a, device_b), preferred_mac_sources(settings)
+        )
+        suggested_id = (
+            normalize_link_value(shared_id_for(_display_name(device_a)))
+            if settings.shared_id_links
+            and not discovered
+            and not has_address(device_a)
+            and not has_address(device_b)
+            else None
         )
         return self.async_show_form(
             step_id=f"discovery_{reason}",
@@ -763,6 +791,7 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         sources=_mac_sources(self.hass, device_a, device_b),
                         required=False,
                         preselect=preselect,
+                        suggested_id=suggested_id,
                     ),
                     **_never_suggest_schema(device_a, device_b),
                 }
@@ -826,6 +855,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
         self._main_device_id: str | None = None
         self._linked_device_ids: list[str] = []
         self._join_link_id: str | None = None
+        self._same_entry = ""
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -960,6 +990,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             new_devices = [get_device(registry, d) for d in new_ids]
             linked_ids = [*old_ids, *new_ids]
             error = _check_devices(registry, main, linked_ids)
+            self._same_entry = _same_entry_names(
+                main, [get_device(registry, d) for d in linked_ids]
+            )
             if not new_ids:
                 errors["base"] = "no_linked_devices"
             elif error:
@@ -1015,6 +1048,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             ),
             errors=errors,
             description_placeholders={
+                "same_entry": self._same_entry,
                 "link": subentry.title,
                 "conflicting_devices": ", ".join(conflicts) or "none",
             },
@@ -1035,6 +1069,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
         if user_input is not None:
             linked_ids = list(dict.fromkeys(user_input[CONF_LINKED_DEVICE_IDS]))
             error = _check_devices(registry, main, linked_ids)
+            self._same_entry = _same_entry_names(
+                main, [get_device(registry, d) for d in linked_ids]
+            )
             already = [
                 device
                 for device in (get_device(registry, d) for d in linked_ids)
@@ -1069,6 +1106,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             ),
             errors=errors,
             description_placeholders={
+                "same_entry": self._same_entry,
                 "main_name": _display_name(main) if main else "Manual entry",
                 "already_linked": already_names,
                 "hidden": _hidden_note(
@@ -1227,6 +1265,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                 main = get_device(registry, main_id) if main_id else None
                 linked_ids = [d for d in selected if d != main_id]
                 error = _check_devices(registry, main, linked_ids)
+                self._same_entry = _same_entry_names(
+                    main, [get_device(registry, d) for d in linked_ids]
+                )
                 unique_id = link_unique_id(main_id, mac)
                 if error:
                     errors["base"] = error
@@ -1326,6 +1367,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
             data_schema=vol.Schema(schema),
             errors=errors,
             description_placeholders={
+                "same_entry": self._same_entry,
                 "main_name": _display_name(main) if main else "Manual entry",
                 "conflicting_devices": ", ".join(conflicts) or "none",
             },
@@ -1355,6 +1397,11 @@ def _match_reason(discovery: dict[str, Any]) -> str:
     if reason == REASON_IDENTIFIER:
         return (
             "They share a hardware identifier, such as a Bluetooth or Zigbee address."
+        )
+    if reason == REASON_NEARBY_MAC:
+        return (
+            "Their addresses are one or two apart, like one chip's Wi-Fi and "
+            "Bluetooth addresses."
         )
     return f"Their names are {discovery.get('score', '')} alike."
 
@@ -1436,13 +1483,29 @@ def _check_devices(registry, main, linked_ids: list[str]) -> str | None:
     devices = [get_device(registry, device_id) for device_id in linked_ids]
     if any(device is None for device in devices):
         return "device_not_found"
-    if main and any(
-        device.id == main.id or device.config_entry_id == main.config_entry_id
-        for device in devices
-        if device is not None
-    ):
+    if main and any(device.id == main.id for device in devices if device):
+        return "same_config_entry"
+    if _same_entry_names(main, devices):
         return "same_config_entry"
     return None
+
+
+def _same_entry_names(main, devices) -> str:
+    """Devices that come from one integration entry, named in groups.
+
+    Home Assistant won't let two devices of one entry share an address or ID,
+    so these can't be in the same link: "Fan (Cloud) and Fan Lights (Cloud)".
+    """
+    by_entry: dict[str | None, list] = {}
+    for device in [main, *devices]:
+        if device is not None:
+            by_entry.setdefault(device.config_entry_id, []).append(device)
+    groups = [
+        " and ".join(_display_name(device) for device in group)
+        for group in by_entry.values()
+        if len(group) > 1
+    ]
+    return "; ".join(groups)
 
 
 # The recheck form field holding the devices to take out of their links.
