@@ -62,7 +62,7 @@ async def test_a_vin_links_two_devices_without_a_mac(hass) -> None:
         result["flow_id"], user_input={CONF_MAC_ADDRESS: VIN}
     )
     assert result["type"] == "create_entry"
-    assert result["title"] == "Family Car (2 Devices Linked)"
+    assert result["title"] == "✅ Family Car (2 Devices Linked)"
     await hass.async_block_till_done()
 
     (link,) = links(hass)

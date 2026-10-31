@@ -120,7 +120,7 @@ The **Suggestions** sensor on the Device Linker device shows how many suggestion
 
 **One integration, one device per link.** Home Assistant won't let two devices of the same integration entry share an address or ID, so two Cloud devices from one account can't be in the same link. **Add link** and **Edit link** name the devices when that happens; put each in its own link.
 
-**Confirmed links.** Each link has a **Confirmed** tickbox in **Edit link**. Device Linker never changes a confirmed link on its own, and you can't remove its devices or switch its address until you untick it. Links you make yourself start confirmed; automatic links don't. Tick it on an automatic link you want to keep as it is.
+**Confirmed links.** Each link has a **Confirmed** tickbox in **Edit link**. Device Linker never changes a confirmed link on its own, and you can't remove its devices or switch its address until you untick it. Links you make yourself start confirmed; automatic links don't. A confirmed link's name starts with ✅, such as **✅ Living Room TV (3 Devices Linked)**. Tick it on an automatic link you want to keep as it is.
 
 **Recheck automatic links**, under **Configure**, lists the devices in automatic links that today's matching rules and your settings wouldn't link, for example after you raise the similarity settings. Nothing is ticked. Take out the ones you choose; each is remembered as unlinked so it isn't linked again. Confirmed links and links you made are never listed.
 

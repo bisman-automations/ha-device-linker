@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.1] - 2026-10-31
+
+### Fixed
+
+- **Confirmed links are easier to spot.** A confirmed link's name now starts with ✅, such as "✅ Boy's Bedroom Hub (4 Devices Linked)", so you can see at a glance which links Device Linker will never change on its own. The mark comes and goes as you tick or untick **Confirmed**.
+
 ## [2.11.0] - 2026-10-30
 
 ### Added
@@ -238,6 +244,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.11.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.11.0...v2.11.1
 [2.11.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.10.0...v2.11.0
 [2.10.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.9.0...v2.10.0
 [2.9.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.8.0...v2.9.0

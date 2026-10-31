@@ -671,7 +671,11 @@ class DeviceLinkerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         str(settings[CONF_ORIGIN]),
                         bool(settings[CONF_CONFIRMED]),
                     ),
-                    link_title(_link_name(main, devices), len(devices) + bool(main)),
+                    link_title(
+                        _link_name(main, devices),
+                        len(devices) + bool(main),
+                        bool(settings[CONF_CONFIRMED]),
+                    ),
                     subentry.unique_id or link_unique_id(main_id, value),
                 )
                 return self.async_abort(reason="linked")
@@ -842,6 +846,7 @@ def _add_link_to_hub(
         link_title(
             _link_name(main, [get_device(registry, device_id) for device_id in linked]),
             len(linked) + bool(main),
+            confirmed,
         ),
         unique_id,
     )
@@ -1021,6 +1026,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                                 main, [get_device(registry, d) for d in linked_ids]
                             ),
                             len(linked_ids) + bool(main),
+                            bool(settings[CONF_CONFIRMED]),
                         ),
                         subentry.unique_id or link_unique_id(main_id, value),
                     )
@@ -1151,6 +1157,7 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                         title=link_title(
                             _link_name(main if main_id else None, linked),
                             len(linked) + bool(main_id),
+                            True,
                         ),
                         data=link_payload(
                             main_id,
@@ -1300,7 +1307,9 @@ class LinkSubentryFlow(ConfigSubentryFlow):
                             entry,
                             subentry,
                             title=link_title(
-                                _link_name(main, linked), len(linked_ids) + bool(main)
+                                _link_name(main, linked),
+                                len(linked_ids) + bool(main),
+                                confirmed,
                             ),
                             unique_id=unique_id,
                             data=link_payload(

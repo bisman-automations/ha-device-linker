@@ -112,7 +112,7 @@ async def test_add_link_links_several_devices_to_the_main_mac(hass) -> None:
         result["flow_id"], user_input={CONF_SELECTED_MAC_ADDRESS: MAC}
     )
     assert result["type"] == "create_entry"
-    assert result["title"] == "Main device (3 Devices Linked)"
+    assert result["title"] == "✅ Main device (3 Devices Linked)"
     await hass.async_block_till_done()
 
     (link,) = links(hass)
@@ -155,7 +155,7 @@ async def test_add_link_links_several_devices_to_the_main_mac(hass) -> None:
     # The form names what it left out, and why: devices in a link.
     hidden = result["description_placeholders"]["hidden"]
     assert hidden.startswith("3 devices aren't listed because they're already linked:")
-    assert "Main device — in Main device (3 Devices Linked)" in hidden
+    assert "Main device — in ✅ Main device (3 Devices Linked)" in hidden
     result = await hass.config_entries.subentries.async_configure(
         result["flow_id"], user_input={CONF_MAIN_DEVICE_ID: MANUAL_ENTRY}
     )
@@ -243,7 +243,7 @@ async def test_legacy_multiselect_entry_becomes_an_editable_link(hass) -> None:
     assert hub.title == "Device Linker"
     (link,) = links(hass)
     # Renamed to the current form after the move.
-    assert link.title == "Main device (2 Devices Linked)"
+    assert link.title == "✅ Main device (2 Devices Linked)"
     assert link.settings[CONF_MAIN_DEVICE_ID] == main.id
     # That build didn't record which MAC it added, so none is owned.
     assert link.settings[CONF_ADDED_CONNECTIONS] == {target.id: False}
@@ -368,7 +368,7 @@ async def test_add_devices_to_an_existing_link(hass) -> None:
     assert link.settings[CONF_MAIN_DEVICE_ID] == main.id
     assert link.settings[CONF_LINKED_DEVICE_IDS] == [target.id, newcomer.id]
     assert link.settings[CONF_ADDED_CONNECTIONS][newcomer.id] is True
-    assert link.title == "Main device (3 Devices Linked)"
+    assert link.title == "✅ Main device (3 Devices Linked)"
     assert (dr.CONNECTION_NETWORK_MAC, MAC) in dr.async_get(hass).async_get(
         newcomer.id
     ).connections
@@ -415,7 +415,7 @@ async def test_a_link_is_named_after_its_most_trusted_device(hass) -> None:
     await hass.async_block_till_done()
     # UniFi is trusted first out of the box, so its device names the link.
     (link,) = links(hass)
-    assert link.title == "Den Hub Client (2 Devices Linked)"
+    assert link.title == "✅ Den Hub Client (2 Devices Linked)"
 
     # Put SwitchBot first: the main device names it, without "(BLE)".
     await async_apply_suggestion_preferences(
@@ -423,7 +423,7 @@ async def test_a_link_is_named_after_its_most_trusted_device(hass) -> None:
     )
     await hass.async_block_till_done()
     (link,) = links(hass)
-    assert link.title == "Den Hub (2 Devices Linked)"
+    assert link.title == "✅ Den Hub (2 Devices Linked)"
 
 
 async def test_two_devices_of_one_entry_are_named_in_the_refusal(hass) -> None:

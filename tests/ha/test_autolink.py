@@ -333,7 +333,7 @@ async def test_manual_entry_gains_another_device_without_changing_origin(hass) -
     settings = get_entry_settings(updated)
     assert settings[CONF_ORIGIN] == "manual"
     assert set(settings["linked_device_ids"]) == {shelly.id, esphome.id}
-    assert updated.title == "Garage Door (3 Devices Linked)"
+    assert updated.title == "✅ Garage Door (3 Devices Linked)"
     # Both old entries were folded into one hub; the second one is gone.
     hub = hub_entry(hass)
     assert hub.version == 3

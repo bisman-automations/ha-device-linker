@@ -209,14 +209,20 @@ def link_unique_id(main_device_id: str | None, mac: str) -> str:
     return f"{main_device_id or 'manual'}_{mac}"
 
 
-def link_title(name: str, count: int) -> str:
+# Marks a confirmed link at the start of its title.
+CONFIRMED_MARK = "✅"
+
+
+def link_title(name: str, count: int, confirmed: bool = False) -> str:
     """A link's title: ``Boy's Bedroom Hub (4 Devices Linked)``.
 
-    ``count`` is every device in the link. :func:`retitle_links` gives every
-    link this title, named after its best device.
+    ``count`` is every device in the link. A confirmed link starts with a
+    check mark. :func:`retitle_links` gives every link this title, named
+    after its best device.
     """
     noun = "Device" if count == 1 else "Devices"
-    return f"{name} ({count} {noun} Linked)"
+    mark = f"{CONFIRMED_MARK} " if confirmed else ""
+    return f"{mark}{name} ({count} {noun} Linked)"
 
 
 # A connection word in brackets at the end of a name: "Curtain (BLE)".
@@ -268,7 +274,7 @@ def retitle_links(hass: HomeAssistant, preferred: Sequence[str]) -> None:
         subentry = hub.subentries.get(subentry_id)
         if found is None or subentry is None:
             continue
-        title = link_title(*found)
+        title = link_title(*found, bool(settings.get(CONF_CONFIRMED)))
         if subentry.title != title:
             hass.config_entries.async_update_subentry(hub, subentry, title=title)
 

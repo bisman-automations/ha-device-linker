@@ -128,6 +128,7 @@ async def test_links_you_make_start_confirmed(hass) -> None:
     await hass.async_block_till_done()
     (link,) = links(hass)
     assert link.settings["confirmed"] is False
+    assert link.title == "Garage TV (2 Devices Linked)"
 
     # Ticking Confirmed in Edit link keeps it out of the recheck.
     result = await _edit(hass, hub, link.entry_id)
@@ -145,6 +146,8 @@ async def test_links_you_make_start_confirmed(hass) -> None:
     await hass.async_block_till_done()
     (link,) = links(hass)
     assert link.settings["confirmed"] is True
+    # A confirmed link is marked in its name.
+    assert link.title == "✅ Garage TV (2 Devices Linked)"
     result = await _open_recheck(hass, hub)
     assert result["reason"] == "nothing_to_recheck"
 
