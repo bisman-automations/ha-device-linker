@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "Set up Device Linker",
-        "description": "Device Linker links devices that are the same hardware, so Home Assistant shows them together under Linked devices. It looks for devices that share a MAC address or hardware identifier, or that have the same or a similar name, and links strong matches on its own. Each link shows under Device Linker, where you can edit or delete it, or add one by hand with Add link. Other matches show as discovered."
+        "description": "Device Linker links devices that are the same hardware, so Home Assistant shows them together under Linked devices. It looks for devices that share a MAC address or hardware identifier, or that have the same or a similar name. Automatic linking is off unless you turn it on in Matching settings. With it on, Device Linker links only a shared MAC address, a hardware identifier, or an exact name of two or more words. Each link shows under Device Linker, where you can edit or delete it, or add one by hand with Add link. Other matches show as discovered."
       },
       "discovery_join": {
         "title": "Add {device} to {link}?",

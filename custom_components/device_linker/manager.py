@@ -284,8 +284,11 @@ class SuggestionManager:
         self._sensor_entry_id = None
 
     async def async_scan(self) -> list[Suggestion]:
-        """Rebuild suggestions, link strong matches, and reconcile discoveries.
+        """Rebuild suggestions, link eligible matches, and reconcile discoveries.
 
+        Automatic linking is off unless Matching settings turns it on. With
+        it on, a shared MAC address, a hardware identifier, or an exact name
+        of two or more words is linked. Every other match stays a suggestion.
         Re-entering while a scan is already applying entries (their setup
         schedules another scan) records one follow-up pass instead of
         running nested. Home Assistant runs this on a single loop.
@@ -1142,7 +1145,16 @@ def _publish_auto_link_issue(hass: HomeAssistant, notices: list[str]) -> None:
         severity=ir.IssueSeverity.WARNING,
         translation_key=ISSUE_AUTO_LINKED,
         translation_placeholders={"count": str(count), "summary": summary},
-        learn_more_url="https://github.com/bisman-automations/ha-device-linker#how-auto-linking-works",
+        # GitHub's anchor for the README heading "How suggestions and
+        # automatic linking work". 2.13.0 renamed the old "How auto-linking
+        # works" heading, and a repair link has to follow the heading: the
+        # fragment is lowercase, with punctuation dropped and spaces turned
+        # into hyphens. tests/test_readme_anchors.py checks every
+        # learn_more_url against the headings that are in the README now.
+        learn_more_url=(
+            "https://github.com/bisman-automations/ha-device-linker"
+            "#how-suggestions-and-automatic-linking-work"
+        ),
     )
 
 

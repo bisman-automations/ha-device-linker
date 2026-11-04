@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.1] - 2026-11-04
+
+### Changed
+
+- **Install from HACS by searching for Device Linker.** The repository is in the HACS default list, so the HACS steps start with that search. Adding it as a custom repository remains the fallback.
+
+### Fixed
+
+- **The setup step describes automatic linking as it works now.** It no longer says Device Linker links strong matches on its own. Automatic linking is off until you turn it on in **Matching settings**, and then it links only a shared MAC address, a hardware identifier, or an exact name of two or more words.
+- **The repair's Learn more link opens the current section.** It pointed at a heading that 2.13.0 renamed. It now opens **How suggestions and automatic linking work**.
+
 ## [2.13.0] - 2026-11-04
 
 ### Changed
@@ -261,6 +272,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.13.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.13.0...v2.13.1
 [2.13.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.11.1...v2.12.0
 [2.11.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.11.0...v2.11.1

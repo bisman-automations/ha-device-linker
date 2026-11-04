@@ -134,6 +134,12 @@ async def test_unifi_same_name_links_when_the_client_has_no_area(hass) -> None:
     assert issue is not None
     assert issue.translation_key == ISSUE_AUTO_LINKED
     assert "Living Room TV" in issue.translation_placeholders["summary"]
+    # The repair's Learn more link is the README section on suggestions.
+    # The anchor test checks that this fragment is still a heading.
+    assert issue.learn_more_url == (
+        "https://github.com/bisman-automations/ha-device-linker"
+        "#how-suggestions-and-automatic-linking-work"
+    )
 
     state_id = er.async_get(hass).async_get_entity_id(
         "sensor", DOMAIN, "device_linker_suggestions"

@@ -37,8 +37,9 @@ New versions show up under **Settings > Updates**. Already installed Device Link
 
 [![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=bisman-automations&repository=ha-device-linker&category=integration)
 
-1. Select the button above, or in HACS open the menu, choose **Custom repositories**, and add `https://github.com/bisman-automations/ha-device-linker` as an **Integration**.
-2. Download **Device Linker** and restart Home Assistant.
+Device Linker is in the HACS default list. In HACS, search for **Device Linker**, download it, and restart Home Assistant.
+
+If that search does not list it, add the repository yourself. Select the button above, or in HACS open the menu, choose **Custom repositories**, and add `https://github.com/bisman-automations/ha-device-linker` as an **Integration**. Then download **Device Linker** and restart Home Assistant.
 
 ### Manual
 
