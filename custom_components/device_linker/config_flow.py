@@ -515,6 +515,8 @@ def _suggestion_schema(
     return {
         **extra,
         vol.Optional(CONF_AUTO_LINK, default=settings.auto_link): (
+            # Off unless this install saved a choice. The translation says
+            # that turning it on writes onto other integrations' devices.
             selector.BooleanSelector()
         ),
         vol.Optional(CONF_AUTO_LINK_SIMILAR, default=settings.auto_link_similar): (

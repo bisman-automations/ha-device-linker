@@ -46,6 +46,7 @@ from .const import (
 from .manager import (
     SuggestionManager,
     async_load_settings,
+    async_register_services,
     async_remember_unlinked,
     preferred_mac_sources,
 )
@@ -77,7 +78,13 @@ type DeviceLinkerConfigEntry = ConfigEntry[LinkRuntime | None]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Nothing to set up before the hub; links live in its subentries."""
+    """Register the administrator actions once. Links live on the hub.
+
+    ``async_setup`` runs when the integration loads, not for each entry, so
+    a hub reload does not register the actions again and unloading the hub
+    does not remove them.
+    """
+    async_register_services(hass)
     return True
 
 

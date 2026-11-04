@@ -11,7 +11,7 @@ from homeassistant.helpers import device_registry as dr
 from tests.ha.helpers import links
 from tests.ha.test_config_flow import _setup_hub
 from tests.ha.test_shared_id import _service_case
-from tests.ha.test_suggestions import _disable_auto_link, _register
+from tests.ha.test_suggestions import _disable_auto_link, _enable_auto_link, _register
 
 SHARED = "12:34:56:78:9a:bc"
 
@@ -54,6 +54,7 @@ async def test_a_group_linked_by_home_assistant_takes_new_devices_once(hass) -> 
 async def test_turning_include_services_off_unlinks_them_now(hass) -> None:
     """Services leave automatic links when the setting is saved, not at restart."""
     await _setup_hub(hass)
+    await _enable_auto_link(hass)
     curtain, routine = await _service_case(hass)
     await async_apply_suggestion_preferences(hass, {"include_services": True})
     await hass.async_block_till_done()
@@ -238,6 +239,7 @@ async def test_never_suggest_a_device_and_take_it_back(hass) -> None:
 async def test_same_named_devices_join_a_group_home_assistant_linked(hass) -> None:
     """UniFi and ESPHome share a MAC; Matter and Cloud lamps join that group."""
     await _setup_hub(hass)
+    await _enable_auto_link(hass)
     mac = "02:00:00:00:00:71"
     unifi = _register(
         hass,
@@ -283,6 +285,7 @@ async def test_same_named_devices_join_a_group_home_assistant_linked(hass) -> No
 async def test_same_names_with_no_address_link_through_a_shared_id(hass) -> None:
     """A fan behind a Bluetooth hub and its Cloud copy share an ID from the name."""
     await _setup_hub(hass)
+    await _enable_auto_link(hass)
     ble = _register(
         hass, domain="switchbot", name="Office Ceiling Fan (BLE)", area="Office"
     )

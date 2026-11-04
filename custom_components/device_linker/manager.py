@@ -1,4 +1,8 @@
-"""Keep link suggestions up to date, link the strong ones, and show the rest.
+"""Keep link suggestions up to date and show them for confirmation.
+
+Automatic linking is off unless the saved settings turn it on. A scan still
+publishes every match as a suggestion. With the setting on, a hardware match
+or an exact multi-word name is linked; a fuzzy name always stays a suggestion.
 
 A single manager runs for the whole integration, started by the first real
 config entry and stopped when the last one unloads. Preferences, dismissed
@@ -24,7 +28,7 @@ from typing import Any
 
 from homeassistant.config_entries import SOURCE_DISCOVERY, ConfigEntry, ConfigSubentry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers import (
     area_registry as ar,
@@ -32,6 +36,7 @@ from homeassistant.helpers import (
     issue_registry as ir,
 )
 from homeassistant.helpers.event import async_track_point_in_utc_time
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -55,6 +60,7 @@ from .const import (
     CONF_SHARED_ID_LINKS,
     CONF_SUGGESTION_THRESHOLD,
     DATA_MANAGER,
+    DEFAULT_AUTO_LINK,
     DEFAULT_AUTO_LINK_THRESHOLD,
     DEFAULT_PREFERRED_MAC_SOURCES,
     DEFAULT_SUGGESTION_THRESHOLD,
@@ -118,8 +124,11 @@ class SuggestionSettings:
     threshold: float = DEFAULT_SUGGESTION_THRESHOLD
     match_hardware: bool = True
     match_names: bool = True
-    auto_link: bool = True
+    # Off until Matching settings saves a choice. See ``_load_settings``.
+    auto_link: bool = DEFAULT_AUTO_LINK
     auto_link_threshold: float = DEFAULT_AUTO_LINK_THRESHOLD
+    # Saved with the other settings. It no longer links a fuzzy name; those
+    # always wait for a confirmed suggestion or Add link.
     auto_link_similar: bool = True
     include_services: bool = False
     # One chip's Wi-Fi and Bluetooth addresses are suggested together.
@@ -154,6 +163,54 @@ def async_get_manager(hass: HomeAssistant) -> SuggestionManager | None:
     if isinstance(manager, SuggestionManager):
         return manager
     return None
+
+
+async def async_handle_rescan(call: ServiceCall) -> None:
+    """Look again. Does nothing until the hub is running."""
+    manager = async_get_manager(call.hass)
+    if manager is None:
+        _LOGGER.debug("Rescan skipped: Device Linker is not running")
+        return
+    await manager.async_scan()
+
+
+async def async_handle_reset_dismissed(call: ServiceCall) -> None:
+    """Forget ignored suggestions and unlinked pairs, then look again.
+
+    With the hub unloaded, the store is still cleared so the next start does
+    not keep pairs this action was asked to forget. The service is
+    administrator-only because forgetting an unlink lets a later scan link
+    those devices again.
+    """
+    manager = async_get_manager(call.hass)
+    if manager is not None:
+        await manager.async_reset_dismissed()
+        return
+    store: Store[dict[str, Any]] = Store(call.hass, STORAGE_VERSION, STORAGE_KEY)
+    current = await _load_settings(store)
+    await _save_settings(
+        store,
+        replace(current, dismissed=frozenset(), unlinked=frozenset()),
+    )
+
+
+@callback
+def async_register_services(hass: HomeAssistant) -> None:
+    """Register the administrator actions once, from ``async_setup``.
+
+    Both change stored dismissals or can write links onto devices from other
+    integrations, so a non-admin cannot call them. A call with no user id
+    (an internal call) is allowed, which is how Home Assistant runs actions
+    that the system itself starts. Registering here, and not from the hub,
+    means a reload does not register them twice and an unload does not
+    remove them.
+    """
+    if not hass.services.has_service(DOMAIN, SERVICE_RESCAN):
+        async_register_admin_service(hass, DOMAIN, SERVICE_RESCAN, async_handle_rescan)
+    if not hass.services.has_service(DOMAIN, SERVICE_RESET):
+        async_register_admin_service(
+            hass, DOMAIN, SERVICE_RESET, async_handle_reset_dismissed
+        )
 
 
 class SuggestionManager:
@@ -205,13 +262,9 @@ class SuggestionManager:
         self._unsub_started = self.hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STARTED, self._schedule_scan
         )
-        self.hass.services.async_register(DOMAIN, SERVICE_RESCAN, self._async_rescan)
-        self.hass.services.async_register(
-            DOMAIN, SERVICE_RESET, self._async_reset_dismissed
-        )
 
     async def async_stop(self) -> None:
-        """Stop listeners and the rescan action."""
+        """Stop listeners. The administrator actions stay registered."""
         if self._unsub_debounce is not None:
             self._unsub_debounce()
             self._unsub_debounce = None
@@ -224,9 +277,9 @@ class SuggestionManager:
         if self._unsub_started is not None:
             self._unsub_started()
             self._unsub_started = None
-        for service in (SERVICE_RESCAN, SERVICE_RESET):
-            if self.hass.services.has_service(DOMAIN, service):
-                self.hass.services.async_remove(DOMAIN, service)
+        # rescan_suggestions and reset_dismissed are registered once in
+        # async_setup. Removing them here would drop them on unload, and the
+        # next hub setup would not register them again.
         self._sensor = None
         self._sensor_entry_id = None
 
@@ -276,6 +329,9 @@ class SuggestionManager:
         matches, auto = _for_links(
             self.hass, matches, preferred_mac_sources(self._settings)
         )
+        # With automatic linking off, plans is empty and shared IDs are not
+        # written, so every match stays a suggestion: a discovery flow, the
+        # sensor, and diagnostics. Confirming one creates the link.
         plans = plan_auto_links(
             auto,
             enabled=self._settings.auto_link,
@@ -479,12 +535,12 @@ class SuggestionManager:
         self._unsub_debounce = None
         await self.async_scan()
 
-    async def _async_rescan(self, _call: Any) -> None:
-        """Handle the rescan action."""
-        await self.async_scan()
+    async def async_reset_dismissed(self) -> None:
+        """Forget ignored suggestions and unlinked pairs, then look again.
 
-    async def _async_reset_dismissed(self, _call: Any) -> None:
-        """Forget ignored suggestions and unlinked pairs, then look again."""
+        This undoes an administrator's unlinks, which is why the service that
+        calls it is registered for administrators only.
+        """
         self._settings = replace(
             self._settings,
             dismissed=frozenset(),
@@ -1363,8 +1419,24 @@ def _string_set(stored: dict[str, Any], key: str) -> frozenset[str]:
     return frozenset(item for item in raw if isinstance(item, str))
 
 
+def _stored_flag(stored: dict[str, Any], key: str, default: bool) -> bool:
+    """Return a stored boolean, or ``default`` when that key was never saved."""
+    if key not in stored:
+        return default
+    return bool(stored[key])
+
+
 async def _load_settings(store: Store[dict[str, Any]]) -> SuggestionSettings:
-    """Load preferences. Keys added in 1.3.0 default when a 1.2 store omits them."""
+    """Load preferences. Keys added in 1.3.0 default when a 1.2 store omits them.
+
+    ``auto_link`` is the exception. The key is kept only when it was written:
+    opening Matching settings, or an earlier scan that saved the store, writes
+    the whole blob including whatever was in effect then. A missing key means
+    the choice was never saved, and that install follows ``DEFAULT_AUTO_LINK``
+    (off) instead of the old implicit on. A stored true or false is kept, so
+    someone who turned automatic linking on, or who saved settings while it
+    was the old default, is unchanged.
+    """
     stored = await store.async_load()
     if not isinstance(stored, dict):
         return SuggestionSettings()
@@ -1374,7 +1446,7 @@ async def _load_settings(store: Store[dict[str, Any]]) -> SuggestionSettings:
         ),
         match_hardware=bool(stored.get("match_hardware", True)),
         match_names=bool(stored.get("match_names", True)),
-        auto_link=bool(stored.get("auto_link", True)),
+        auto_link=_stored_flag(stored, "auto_link", DEFAULT_AUTO_LINK),
         auto_link_threshold=_clamp_threshold(
             stored.get("auto_link_threshold", DEFAULT_AUTO_LINK_THRESHOLD)
         ),

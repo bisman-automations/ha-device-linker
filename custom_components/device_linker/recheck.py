@@ -105,6 +105,8 @@ def find_mismatches(
                 match_names=settings.match_names,
                 preferred_integrations=preferred,
             )
+            # Fuzzy and similar names are not plans, so an earlier automatic
+            # link of that kind is listed here even when those settings are on.
             plans = plan_auto_links(
                 matches,
                 enabled=True,

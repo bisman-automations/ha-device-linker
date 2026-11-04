@@ -25,11 +25,14 @@ CONF_SUGGESTION_THRESHOLD = "suggestion_threshold"
 CONF_MATCH_HARDWARE = "match_hardware"
 CONF_MATCH_NAMES = "match_names"
 # Automatic linking. Stored with the suggestion preferences, for the whole
-# integration. ``origin`` on a config entry is ``manual`` or ``auto``.
+# integration. Off unless the suggestions store contains this key: a missing
+# key follows ``DEFAULT_AUTO_LINK``, and a stored true or false is kept.
+# ``origin`` on a config entry is ``manual`` or ``auto``.
 CONF_AUTO_LINK = "auto_link"
 CONF_AUTO_LINK_THRESHOLD = "auto_link_threshold"
-# Also link fuzzy names automatically when one name is the other plus only
-# filler words ("Deck Camera" and "G4 Deck Camera"). Added in 2.0.0.
+# Kept in the store and in Matching settings. Since 2.13.0 a fuzzy or
+# similar name is never linked without confirmation, so this no longer
+# writes a link on its own. Added in 2.0.0.
 CONF_AUTO_LINK_SIMILAR = "auto_link_similar"
 # Also link services: devices marked as services and every device of a
 # service integration (Music Assistant players). Off by default.
@@ -67,9 +70,15 @@ ORIGIN_AUTO = "auto"
 # 0.8 keeps a shared distinctive word ("ceiling", "tablet") and drops weak
 # partial overlaps. Lower it from the options flow to see more name matches.
 DEFAULT_SUGGESTION_THRESHOLD = 0.8
-# Fuzzy names at or above this score are linked automatically. Exact names
-# and hardware matches do not use this value. 0.95 leaves ordinary partial
-# overlaps as suggestions.
+# Off for a new install and for a suggestions store that never saved
+# ``auto_link``. An install that saved true or false keeps that choice.
+# Turning it on writes a MAC address or a shared ID onto devices that
+# belong to other integrations, and only for a hardware match or the same
+# multi-word name. Fuzzy names stay suggestions either way.
+DEFAULT_AUTO_LINK = False
+# Still stored and shown. Since 2.13.0 a fuzzy name is never linked without
+# confirmation, so this threshold no longer admits one. Exact names and
+# hardware matches do not use it.
 DEFAULT_AUTO_LINK_THRESHOLD = 0.95
 SUGGESTION_THRESHOLD_MIN = 0.5
 SUGGESTION_THRESHOLD_MAX = 1.0
@@ -106,8 +115,12 @@ SERVICE_RESET = "reset_dismissed"
 ISSUE_AUTO_LINKED = "auto_linked"
 STORAGE_KEY = "device_linker.suggestions"
 # Version 1 is still the on-disk shape. 1.3.0 adds keys (``auto_link``,
-# ``auto_link_threshold``, ``unlinked``, ``announced``). Missing keys load
-# as the defaults below, so a 1.2 store keeps its threshold and dismissals.
+# ``auto_link_threshold``, ``unlinked``, ``announced``). A missing
+# ``auto_link`` loads as ``DEFAULT_AUTO_LINK`` (off since 2.13.0). A stored
+# true or false is kept, including an install that saved the old default by
+# opening Matching settings or by an earlier scan writing the store. Other
+# missing keys load as the defaults below, so a 1.2 store keeps its
+# threshold and dismissals.
 STORAGE_VERSION = 1
 
 REASON_MAC = "mac"

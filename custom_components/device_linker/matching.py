@@ -23,15 +23,16 @@ Two tiers:
   score from :mod:`difflib` (no extra dependency) and has to reach the
   configured threshold.
 
-  Automatic linking is stricter than suggesting. A fuzzy name is linked only
-  when the devices share at least two distinctive words, they are in the same
-  area, and the score reaches the automatic threshold. One shared word
-  ("North window" and "North porch") stays a suggestion. When either device
-  has no area, only a multi-word exact name is linked automatically, so a
-  bare "TV" is not attached to every TV. A MAC this integration copied onto
-  a device is ignored when choosing the anchor. Fuzzy comparisons skip pairs
-  where neither device has a network MAC, except two devices in the same
-  area, which are still suggested.
+  Automatic linking is stricter than suggesting, and it is off unless the
+  caller passes ``enabled``. With it on, a hardware match is linked when one
+  device already has the network MAC to copy, and so is an exact name of two
+  or more words (a connection tag such as "(BLE)" does not count as a word).
+  A one-word exact name ("TV") stays a suggestion even when both devices
+  have an area. A fuzzy or similar name is never linked without confirmation,
+  however high the score and whether or not ``similar_names`` is set. A MAC
+  this integration copied onto a device is ignored when choosing the anchor.
+  Fuzzy comparisons skip pairs where neither device has a network MAC, except
+  two devices in the same area, which are still suggested.
 
 Pairs are skipped when they are the same device, share a config entry, are
 already linked, or were dismissed or unlinked.
@@ -828,16 +829,14 @@ def plan_auto_links(
     """Group matches that should be linked without asking.
 
     Hardware matches are included whenever ``enabled`` is set and the anchor
-    MAC is unambiguous. An exact name is included too, except a one-word
-    exact name when either device has no area (a bare "TV"). A fuzzy name is
-    included when the devices are both assigned to the same area, they share
-    at least two distinctive words, and the score reaches ``threshold``.
-    With ``similar_names``, a fuzzy name is also included when one name is
-    the other plus only filler words (:func:`names_contained`), the score
-    reaches ``threshold``, and the areas are compatible (a missing area is
-    compatible). Each plan is one anchor device plus the MAC already on it. A device is
-    attached to at most one plan, and at most :data:`MAX_AUTO_LINK_GROUP`
-    devices, so the rest stay suggestions.
+    MAC is unambiguous. An exact name of two or more words is included too.
+    A one-word exact name (a bare "TV", or "Lamp" plus a "(BLE)" tag) is not,
+    even when both devices have an area. A fuzzy or similar name is never
+    included: ``threshold`` and ``similar_names`` are still accepted so a
+    scan and Recheck can pass the saved settings through, and they do not
+    admit a fuzzy pair. Each plan is one anchor device plus the MAC already
+    on it. A device is attached to at most one plan, and at most
+    :data:`MAX_AUTO_LINK_GROUP` devices, so the rest stay suggestions.
     """
     if not enabled:
         return []
@@ -1058,38 +1057,39 @@ def _network_macs(connections: Iterable[tuple[str, str]]) -> set[str]:
     return found
 
 
+def _name_word_count(name: str) -> int:
+    """Words in a folded name, not counting a connection tag such as BLE.
+
+    "Living Room TV" is three words. "TV" is one. "Lamp (BLE)" is one: the
+    tag says how the device is reached, not which device it is. Area words
+    stay, so a device named after its room is still more than one word.
+    """
+    return sum(
+        1 for token in fold_name(name).split() if token not in _CONNECTION_TOKENS
+    )
+
+
 def _auto_eligible(
     item: Suggestion, threshold: float, *, similar_names: bool = False
 ) -> bool:
     """Return whether this match is strong enough to link on its own.
 
-    Hardware matches are included. An exact name is included, but a one-word
-    exact name is not when either device has no area. A fuzzy name needs two
-    shared distinctive words, both devices assigned to the same area, and a
-    score at the automatic threshold. One shared word stays a suggestion.
+    A MAC, or another hardware identifier, is included. A plan still needs
+    an anchor and a MAC, so a serial that does not resolve to one stays a
+    suggestion until someone confirms an address. An exact name is included
+    only when both names are two or more words. A fuzzy or similar name is
+    not, whatever ``threshold`` and ``similar_names`` are: those arguments
+    are kept so callers can pass the saved settings, and a close name always
+    waits for confirmation.
     """
+    # Referenced so the saved settings stay part of the call. They do not
+    # admit a fuzzy name; see the docstring.
+    del threshold, similar_names
     if item.reason in {REASON_MAC, REASON_IDENTIFIER}:
         return True
-    if item.reason != REASON_NAME:
+    if item.reason != REASON_NAME or not item.exact:
         return False
-    unassigned = item.area_name_a is None or item.area_name_b is None
-    if item.exact:
-        if unassigned and len(fold_name(item.name_a).split()) < 2:
-            return False
-        return True
-    if item.score < threshold:
-        return False
-    if similar_names and item.shared_tokens >= 1:
-        area = item.area_name_a or item.area_name_b
-        if (
-            item.area_name_a
-            and item.area_name_b
-            and item.area_name_a != item.area_name_b
-        ):
-            area = None
-        if names_contained(item.name_a, item.name_b, area):
-            return True
-    return not unassigned and item.shared_tokens >= 2
+    return min(_name_word_count(item.name_a), _name_word_count(item.name_b)) >= 2
 
 
 def auto_eligible(

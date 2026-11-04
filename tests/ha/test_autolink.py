@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 
+import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -19,7 +20,10 @@ from custom_components.device_linker.const import (
 from custom_components.device_linker.manager import async_get_manager
 from custom_components.device_linker.matching import pair_key
 from custom_components.device_linker.registry import hub_entry
+from homeassistant.auth.const import GROUP_ID_ADMIN, GROUP_ID_USER
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import Context
+from homeassistant.exceptions import Unauthorized
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.issue_registry import async_get as async_get_issues
 from homeassistant.helpers.storage import Store
@@ -31,6 +35,7 @@ from tests.ha.helpers import (
     refresh,
     remove_link,
 )
+from tests.ha.test_suggestions import _enable_auto_link
 from tests.ha.unifi_fixture import async_setup_anchor, async_unifi_name_case
 
 TV_MAC = "aa:bb:cc:dd:ee:10"
@@ -52,6 +57,7 @@ async def test_unifi_same_name_links_when_the_client_has_no_area(hass) -> None:
     this registry produced no suggestions and the sensor stayed at 0.
     """
     await async_setup_anchor(hass)
+    await _enable_auto_link(hass)
     case = await async_unifi_name_case(hass)
     manager = async_get_manager(hass)
     assert manager is not None
@@ -144,6 +150,7 @@ async def test_unifi_same_name_links_when_the_client_has_no_area(hass) -> None:
 async def test_exact_pair_leaves_the_suggestion_count_at_zero(hass) -> None:
     """A single exact pair is linked, so the sensor stays at 0 and records the scan."""
     await async_setup_anchor(hass)
+    await _enable_auto_link(hass)
     unifi_config = MockConfigEntry(domain="unifi")
     unifi_config.add_to_hass(hass)
     apple_config = MockConfigEntry(domain="apple_tv")
@@ -181,6 +188,7 @@ async def test_exact_pair_leaves_the_suggestion_count_at_zero(hass) -> None:
 async def test_deleting_an_entry_is_not_linked_again_until_reset(hass) -> None:
     """Unlink is sticky. Reset dismissed and unlinked is what brings the pair back."""
     await async_setup_anchor(hass)
+    await _enable_auto_link(hass)
     unifi_config = MockConfigEntry(domain="unifi")
     unifi_config.add_to_hass(hass)
     apple_config = MockConfigEntry(domain="apple_tv")
@@ -225,6 +233,7 @@ async def test_deleting_an_entry_is_not_linked_again_until_reset(hass) -> None:
 async def test_edit_link_removes_one_device_and_does_not_add_it_back(hass) -> None:
     """Removing a device with Edit link is an unlink, not a pause."""
     await async_setup_anchor(hass)
+    await _enable_auto_link(hass)
     unifi_config = MockConfigEntry(domain="unifi")
     unifi_config.add_to_hass(hass)
     apple_config = MockConfigEntry(domain="apple_tv")
@@ -286,6 +295,7 @@ async def test_edit_link_removes_one_device_and_does_not_add_it_back(hass) -> No
 async def test_manual_entry_gains_another_device_without_changing_origin(hass) -> None:
     """An existing link does not block a different device, and stays manual."""
     anchor = await async_setup_anchor(hass)
+    await _enable_auto_link(hass)
     unifi_config = MockConfigEntry(domain="unifi")
     unifi_config.add_to_hass(hass)
     shelly_config = MockConfigEntry(domain="shelly")
@@ -349,8 +359,12 @@ async def test_manual_entry_gains_another_device_without_changing_origin(hass) -
     assert {link.settings[CONF_ORIGIN] for link in links(hass)} == {"manual"}
 
 
-async def test_v1_store_keeps_dismissals_and_turns_auto_link_on(hass) -> None:
-    """A 1.2.x suggestion store gains the new keys without dropping what it had."""
+async def test_v1_store_keeps_dismissals_and_leaves_auto_link_off(hass) -> None:
+    """A store that never saved auto_link keeps its dismissals and stays off.
+
+    2.13.0 changed the missing-key default from on to off. A saved true or
+    false is a different test.
+    """
     store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
     await store.async_save(
         {
@@ -364,7 +378,7 @@ async def test_v1_store_keeps_dismissals_and_turns_auto_link_on(hass) -> None:
     manager = async_get_manager(hass)
     assert manager.settings.threshold == 0.7
     assert manager.settings.match_hardware is False
-    assert manager.settings.auto_link is True
+    assert manager.settings.auto_link is False
     assert manager.settings.auto_link_threshold == 0.95
     assert "suggestion:left:right" in manager.settings.dismissed
     assert manager.settings.unlinked == frozenset()
@@ -498,6 +512,7 @@ async def test_auto_link_off_still_discovers_the_unifi_pair(hass) -> None:
 async def test_copied_mac_does_not_anchor_the_next_device(hass) -> None:
     """The Apple TV that received the UniFi MAC does not anchor a later match."""
     await async_setup_anchor(hass)
+    await _enable_auto_link(hass)
     unifi_config = MockConfigEntry(domain="unifi")
     unifi_config.add_to_hass(hass)
     apple_config = MockConfigEntry(domain="apple_tv")
@@ -581,22 +596,29 @@ async def _set_similar(hass, enabled: bool) -> None:
     )
 
 
-async def test_similar_names_are_linked_when_the_setting_is_on(hass) -> None:
-    """Front Driveway (UniFi) and Front Driveway Camera become one link."""
+async def test_similar_names_stay_suggestions_when_automatic_linking_is_on(
+    hass,
+) -> None:
+    """Front Driveway and Front Driveway Camera are confirmed, not written."""
     await async_setup_anchor(hass)
     await _set_similar(hass, True)
     unifi, camera = await _camera_pair(hass)
     await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
     await hass.async_block_till_done()
 
-    link = _entry_for(hass, camera.id)
-    assert link is not None
-    settings = get_entry_settings(link)
-    assert settings["main_device_id"] == unifi.id
-    assert settings["linked_device_ids"] == [camera.id]
-    assert (dr.CONNECTION_NETWORK_MAC, "aa:bb:cc:dd:ee:30") in dr.async_get(
-        hass
-    ).async_get(camera.id).connections
+    assert _entry_for(hass, camera.id) is None
+    manager = async_get_manager(hass)
+    assert any(
+        {item.device_id_a, item.device_id_b} == {unifi.id, camera.id}
+        and item.exact is False
+        for item in manager.suggestions
+    )
+    flows = [
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"].get("unique_id", "").startswith("suggestion:")
+    ]
+    assert flows
 
 
 async def test_similar_names_stay_suggestions_when_the_setting_is_off(hass) -> None:
@@ -708,3 +730,153 @@ async def test_edit_link_lists_the_main_device_and_where_each_mac_came_from(
     assert (dr.CONNECTION_NETWORK_MAC, wifi_mac) in registry.async_get(
         unifi.id
     ).connections
+
+
+def _named_pair(
+    hass, *, domain_a: str, domain_b: str, name_a: str, name_b: str, mac: str
+):
+    """Two devices from different integrations. Only the first has ``mac``."""
+    config_a = MockConfigEntry(domain=domain_a)
+    config_a.add_to_hass(hass)
+    config_b = MockConfigEntry(domain=domain_b)
+    config_b.add_to_hass(hass)
+    registry = dr.async_get(hass)
+    first = registry.async_get_or_create(
+        config_entry_id=config_a.entry_id,
+        identifiers={(domain_a, name_a)},
+        connections={(dr.CONNECTION_NETWORK_MAC, mac)},
+        name=name_a,
+    )
+    second = registry.async_get_or_create(
+        config_entry_id=config_b.entry_id,
+        identifiers={(domain_b, name_b)},
+        name=name_b,
+    )
+    return first, second
+
+
+async def test_a_new_install_confirms_a_strong_match_until_auto_link_is_on(
+    hass,
+) -> None:
+    """The default is off. The same pair is linked only after the setting is saved."""
+    entry = await async_setup_anchor(hass)
+    manager = async_get_manager(hass)
+    assert manager.settings.auto_link is False
+    unifi, apple = _named_pair(
+        hass,
+        domain_a="unifi",
+        domain_b="apple_tv",
+        name_a="Living Room TV",
+        name_b="Living Room TV",
+        mac="aa:bb:cc:dd:ee:70",
+    )
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+    assert _links(hass) == []
+    assert any(
+        {item.device_id_a, item.device_id_b} == {unifi.id, apple.id} and item.exact
+        for item in manager.suggestions
+    )
+    flows = [
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"].get("unique_id", "").startswith("suggestion:")
+    ]
+    assert flows
+    assert flows[0]["step_id"] == "discovery_name"
+
+    await _enable_auto_link(hass)
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    await hass.async_block_till_done()
+    linked = _entry_for(hass, apple.id)
+    assert linked is not None
+    assert get_entry_settings(linked)["main_device_id"] == unifi.id
+    assert manager.settings.auto_link is True
+
+    # The actions are registered on the integration, so unloading the hub
+    # leaves them in place and a later setup can still call them.
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.services.has_service(DOMAIN, SERVICE_RESCAN)
+    assert hass.services.has_service(DOMAIN, SERVICE_RESET)
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await hass.services.async_call(DOMAIN, SERVICE_RESCAN, {}, blocking=True)
+
+
+async def test_a_saved_auto_link_value_is_kept(hass) -> None:
+    """Only an explicit stored choice survives. Missing stays off; true stays on."""
+    store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+    await store.async_save({"auto_link": False, "threshold": 0.8})
+    entry = await async_setup_anchor(hass)
+    assert async_get_manager(hass).settings.auto_link is False
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    await store.async_save({"auto_link": True, "threshold": 0.8})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    manager = async_get_manager(hass)
+    assert manager.settings.auto_link is True
+    unifi, shelly = _named_pair(
+        hass,
+        domain_a="unifi",
+        domain_b="shelly",
+        name_a="Porch Tablet",
+        name_b="Porch Tablet",
+        mac="aa:bb:cc:dd:ee:71",
+    )
+    await manager.async_scan()
+    await hass.async_block_till_done()
+    linked = _entry_for(hass, shelly.id)
+    assert linked is not None
+    assert get_entry_settings(linked)["main_device_id"] == unifi.id
+    assert get_entry_settings(linked)[CONF_ORIGIN] == "auto"
+
+
+async def test_rescan_and_reset_require_an_administrator(hass) -> None:
+    """A non-admin cannot forget unlinks or scan them back into the registry."""
+    await async_setup_anchor(hass)
+    await _enable_auto_link(hass)
+    unifi, apple = _named_pair(
+        hass,
+        domain_a="unifi",
+        domain_b="apple_tv",
+        name_a="Office Speaker",
+        name_b="Office Speaker",
+        mac="aa:bb:cc:dd:ee:72",
+    )
+    manager = async_get_manager(hass)
+    await manager.async_scan()
+    await hass.async_block_till_done()
+    created = _entry_for(hass, apple.id)
+    assert created is not None
+    await remove_link(hass, created)
+    assert pair_key(unifi.id, apple.id) in manager.settings.unlinked
+
+    if not any(user.is_owner for user in await hass.auth.async_get_users()):
+        await hass.auth.async_create_user("Owner", group_ids=[GROUP_ID_ADMIN])
+    guest = await hass.auth.async_create_user("Guest", group_ids=[GROUP_ID_USER])
+    assert guest.is_admin is False
+    guest_context = Context(user_id=guest.id)
+    for service in (SERVICE_RESCAN, SERVICE_RESET):
+        with pytest.raises(Unauthorized):
+            await hass.services.async_call(
+                DOMAIN,
+                service,
+                {},
+                blocking=True,
+                context=guest_context,
+            )
+    assert pair_key(unifi.id, apple.id) in manager.settings.unlinked
+    assert _entry_for(hass, apple.id) is None
+
+    await hass.services.async_call(DOMAIN, SERVICE_RESET, {}, blocking=True)
+    await hass.async_block_till_done()
+    assert pair_key(unifi.id, apple.id) not in manager.settings.unlinked
+    restored = _entry_for(hass, apple.id)
+    assert restored is not None
+    assert (dr.CONNECTION_NETWORK_MAC, "aa:bb:cc:dd:ee:72") in dr.async_get(
+        hass
+    ).async_get(apple.id).connections

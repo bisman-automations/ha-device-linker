@@ -32,6 +32,15 @@ MAC = "aa:bb:cc:dd:ee:ff"
 
 async def _disable_auto_link(hass) -> None:
     """Keep the confirm-each-suggestion path these tests were written for."""
+    await _set_auto_link(hass, False)
+
+
+async def _enable_auto_link(hass) -> None:
+    """Opt in, the way Matching settings does. A new install leaves it off."""
+    await _set_auto_link(hass, True)
+
+
+async def _set_auto_link(hass, enabled: bool) -> None:
     manager = async_get_manager(hass)
     assert manager is not None
     settings = manager.settings
@@ -39,8 +48,10 @@ async def _disable_auto_link(hass) -> None:
         threshold=settings.threshold,
         match_hardware=settings.match_hardware,
         match_names=settings.match_names,
-        auto_link=False,
+        auto_link=enabled,
         auto_link_threshold=settings.auto_link_threshold,
+        auto_link_similar=settings.auto_link_similar,
+        scan=False,
     )
 
 

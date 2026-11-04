@@ -92,7 +92,7 @@
       },
       "settings": {
         "title": "Device Linker settings",
-        "description": "These settings apply to every link. Matching MAC addresses and hardware identifiers, and devices with exactly the same name, are linked automatically when automatic linking is on. With similar names on, a name that is the other name plus words like Camera or a model number (Deck Camera and G4 Deck Camera) is linked too. Other name matches show as discovered for you to confirm. A device with no area can match a device in any area; devices in two different areas never match by name.",
+        "description": "These settings apply to every link. Automatic linking is off until you turn it on, so every match is a suggestion you confirm or a link you add yourself. When it is on, Device Linker writes a MAC address or a shared ID onto devices from other integrations without asking, and only for a shared MAC address or hardware ID, or the same name of two or more words. A similar name always waits for you to confirm it. A device with no area can match a device in any area; devices in two different areas never match by name.",
         "data": {
           "preferred_mac_sources": "Preferred MAC address sources",
           "auto_link": "Link strong matches automatically",
@@ -108,14 +108,15 @@
           "multi_link_integrations": "Integrations that can be in more than one link"
         },
         "data_description": {
-          "auto_link_similar": "Links names like Deck Camera and G4 Deck Camera without asking. Names that differ by a brand or a place, like Living Room TV and Living Room Apple TV, still ask first.",
-          "auto_link_threshold": "How alike two names must be to link them without asking.",
+          "auto_link": "Off by default. When on, Device Linker adds a MAC address or a shared ID to devices that belong to other integrations, without asking. It does this only when they share a MAC address or another hardware ID, or when they have the same name of two or more words, such as Living Room TV. A similar name, such as Deck Camera and G4 Deck Camera, is never linked until you confirm the suggestion or use Add link.",
+          "auto_link_similar": "Similar names, such as Deck Camera and G4 Deck Camera, are always suggestions you confirm. Device Linker does not link them on its own, whether this is on or off, so a close name cannot put one device's address on a different device. The switch is kept with your saved settings.",
+          "auto_link_threshold": "No longer decides which names are linked without asking. Similar names always wait for you to confirm them. How alike two names must be to show up as a suggestion is set by Name similarity for suggestions.",
           "suggestion_threshold": "How alike two names must be to show them as discovered.",
-          "include_services": "Off: services are left out, such as Daily Routine routines and Music Assistant players, which are software rather than hardware. On: they can be suggested, linked automatically and chosen in Add link like any other device.",
+          "include_services": "Off: services are left out, such as Daily Routine routines and Music Assistant players, which are software rather than hardware. On: they can be suggested and chosen in Add link like any other device, and linked automatically when that setting is on.",
           "ignored_devices": "These devices are never suggested or linked automatically. Remove a device to have it suggested again. You can still link it yourself with Add link.",
           "preferred_mac_sources": "Integrations you trust to report a device's real MAC address, most trusted first, such as UniFi. When a link has a choice, the address from the first of these is picked, its device becomes the main device, and its name names the link. The order is the order you add them: to move one, remove it and add it again.",
           "match_nearby_macs": "Suggests two devices whose addresses are one or two apart, like one ESP32 chip's Wi-Fi and Bluetooth addresses. Always a suggestion, never linked automatically.",
-          "shared_id_links": "Devices with the same name and no address at all, such as a Bluetooth device behind a hub and its Cloud copy, are linked with an ID made from the name (office-ceiling-fan). Linked automatically when automatic linking is on; otherwise the suggestion fills in the ID.",
+          "shared_id_links": "Devices with the same name and no address at all, such as a Bluetooth device behind a hub and its Cloud copy, are linked with an ID made from the name (office-ceiling-fan). Linked automatically when automatic linking is on and the name is more than one word; otherwise the suggestion fills in the ID.",
           "multi_link_integrations": "Devices from these integrations can be added to more than one link with Add link, such as one Matter device that stands for two SwitchBot curtains. Each link puts its own address on the device. Use it when another integration (like SwitchBot Cloud) has one device for each part, which can't share one link."
         }
       },
@@ -154,11 +155,11 @@
   "services": {
     "rescan_suggestions": {
       "name": "Rescan suggestions",
-      "description": "Look again for devices that share a MAC address or hardware identifier, or that have the same or a similar name. Strong matches are linked automatically when that setting is on."
+      "description": "Look again for devices that share a MAC address or hardware identifier, or that have the same or a similar name. Each match is a suggestion you confirm. It is linked on its own only when Link strong matches automatically is on, and only for a shared address or the same name of two or more words."
     },
     "reset_dismissed": {
       "name": "Reset dismissed and unlinked",
-      "description": "Forget ignored suggestions and devices you unlinked, then look again. Pairs you had separated can be linked automatically once more."
+      "description": "Forget ignored suggestions and devices you unlinked, then look again. Pairs you had separated can be suggested again, and linked on their own when automatic linking is on. Only an administrator can run this."
     }
   },
   "issues": {

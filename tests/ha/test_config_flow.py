@@ -291,6 +291,7 @@ async def test_settings_are_on_the_hub(hass) -> None:
     """Configure holds the settings, including similar names."""
     hub = await _setup_hub(hass)
     manager = async_get_manager(hass)
+    assert manager.settings.auto_link is False
     assert manager.settings.auto_link_similar is True
 
     result = await hass.config_entries.options.async_init(hub.entry_id)
@@ -300,6 +301,7 @@ async def test_settings_are_on_the_hub(hass) -> None:
         result["flow_id"], user_input={"next_step_id": "settings"}
     )
     assert result["step_id"] == "settings"
+    assert result["data_schema"]({})["auto_link"] is False
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], user_input={CONF_AUTO_LINK_SIMILAR: False}
     )

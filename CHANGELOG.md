@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] - 2026-11-04
+
+### Changed
+
+- **Automatic linking is off until you turn it on.** A new install, and an install that never saved **Link strong matches automatically**, leaves every match as a suggestion you confirm or a link you add with **Add link**. Device Linker does not write a MAC address or a shared ID onto another integration's device until you do one of those. If your suggestions store already has that setting saved, the saved choice is kept: on stays on, and off stays off. Turn it on under **Configure**, then **Matching settings**. The setting says that it edits devices from other integrations.
+- **Similar names always ask first, even with automatic linking on.** Device Linker then links only a shared MAC address or hardware ID, or the same name of two or more words, such as Living Room TV. A similar name, such as Deck Camera and G4 Deck Camera, and a one-word name such as TV, stay suggestions you confirm. **Link similar names automatically** and **Automatic name similarity** are still in Matching settings and are saved with your other settings; they no longer link those names on their own. **Recheck automatic links** lists similar-name links an earlier version made, so you can take them out. Links you already have are not removed on their own.
+
+### Security
+
+- **Rescan suggestions and Reset dismissed and unlinked require an administrator.** Someone who is not an administrator can no longer run them. Reset dismissed forgets pairs you unlinked, so only an administrator should be able to do that.
+
 ## [2.12.0] - 2026-10-31
 
 ### Added
@@ -250,6 +261,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.13.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.12.0...v2.13.0
 [2.12.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.11.1...v2.12.0
 [2.11.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.11.0...v2.11.1
 [2.11.0]: https://github.com/bisman-automations/ha-device-linker/compare/v2.10.0...v2.11.0
