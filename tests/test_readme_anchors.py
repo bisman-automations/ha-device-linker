@@ -428,8 +428,9 @@ def test_readme_headings_match_github_anchors() -> None:
     """
     anchors = set(github_anchors(README.read_text(encoding="utf-8")))
     assert "how-suggestions-and-automatic-linking-work" in anchors
-    assert "marketplace-home-assistant-202611-and-newer" in anchors
+    assert "marketplace-home-assistant-202611-and-newer-recommended" in anchors
     assert "hacs-home-assistant-202610-and-older" in anchors
+    assert "custom-repository" in anchors
     assert "cleaning-up-leftover-addresses" in anchors
     # The heading 2.13.0 renamed away. It must not be the one we link, and
     # it is not a heading any more, which is why the old repair URL 404'd

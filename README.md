@@ -24,22 +24,30 @@ One device is the main device: the one that already has the MAC address, or a MA
 
 Requires **Home Assistant 2026.8 or newer**.
 
-### Marketplace (Home Assistant 2026.11 and newer)
+### Marketplace (Home Assistant 2026.11 and newer, recommended)
 
 [![Open your Home Assistant instance and open this repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=bisman-automations&repository=ha-device-linker&category=integration)
 
-1. Select the button above, or go to **Settings > Marketplace**, choose **Add from link**, enter `bisman-automations/ha-device-linker` under **GitHub link**, and select **Add**. Adding a repository from a link needs a GitHub connection; the Marketplace asks you to connect one if you haven't.
-2. Install **Device Linker**. If a repair asks you to restart Home Assistant, restart it.
+1. Open the Marketplace and search for **Device Linker**, or select the button above to open this repository in the Marketplace.
+2. Download **Device Linker** and restart Home Assistant.
 
-New versions show up under **Settings > Updates**. Already installed Device Linker with HACS? There's nothing to do: Home Assistant moves it into the Marketplace the first time it starts on 2026.11.
+New versions show up under **Settings > Updates**. Already installed Device Linker with
+HACS? There's nothing to do: Home Assistant moves it into the Marketplace the
+first time it starts on 2026.11.
 
 ### HACS (Home Assistant 2026.10 and older)
 
 [![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=bisman-automations&repository=ha-device-linker&category=integration)
 
-Device Linker is in the HACS default list. In HACS, search for **Device Linker**, download it, and restart Home Assistant.
+1. Open HACS and search for **Device Linker**, or select the button above to open this repository in HACS.
+2. Download **Device Linker** and restart Home Assistant.
 
-If that search does not list it, add the repository yourself. Select the button above, or in HACS open the menu, choose **Custom repositories**, and add `https://github.com/bisman-automations/ha-device-linker` as an **Integration**. Then download **Device Linker** and restart Home Assistant.
+### Custom repository
+
+If **Device Linker** does not appear in search:
+
+1. In HACS open the menu, choose **Custom repositories**, and add `https://github.com/bisman-automations/ha-device-linker` as an **Integration**.
+2. Download **Device Linker** and restart Home Assistant.
 
 ### Manual
 
