@@ -15,6 +15,9 @@ from .const import DOMAIN
 from .manager import SuggestionManager, async_get_manager, auto_linked_summaries
 from .registry import is_hub
 
+# Coordinator or push updates; nothing polls on its own.
+PARALLEL_UPDATES = 0
+
 _DEVICE_INFO = DeviceInfo(
     identifiers={(DOMAIN, "suggestions")},
     name="Device Linker",
