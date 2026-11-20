@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.4] - 2026-11-20
+
+### Fixed
+
+- **Linked devices that become child devices.** From Home Assistant 2026.11, an integration can turn one of its devices into a child device (part of another device). Such a device can't carry a shared MAC address, so Device Linker now leaves it out of its links, suggestions and cleanup instead of running into errors when it tries to put the address back.
+
+### Changed
+
+- **Ruff 0.17.6.** Linting uses the current Ruff release.
+
 ## [2.13.3] - 2026-11-13
 
 ### Changed
@@ -286,6 +296,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.13.4]: https://github.com/bisman-automations/ha-device-linker/compare/v2.13.3...v2.13.4
 [2.13.3]: https://github.com/bisman-automations/ha-device-linker/compare/v2.13.2...v2.13.3
 [2.13.2]: https://github.com/bisman-automations/ha-device-linker/compare/v2.13.1...v2.13.2
 [2.13.1]: https://github.com/bisman-automations/ha-device-linker/compare/v2.13.0...v2.13.1

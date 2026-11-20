@@ -34,7 +34,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 
 from .const import CONF_LINKED_DEVICE_IDS, CONF_MAC_ADDRESS, CONF_MAIN_DEVICE_ID, DOMAIN
-from .registry import hub_links, is_service, link_item, text_pairs
+from .registry import get_device, hub_links, is_service, link_item, text_pairs
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ def remove_leftovers(hass: HomeAssistant, keys: Iterable[str]) -> tuple[int, lis
     failed: list[str] = []
     for key in keys:
         device_id, _, value = key.partition(SEPARATOR)
-        device = registry.async_get(device_id)
+        device = get_device(registry, device_id)
         if device is None or not value:
             continue
         field, item = link_item(value)

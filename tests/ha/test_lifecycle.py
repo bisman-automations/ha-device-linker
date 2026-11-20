@@ -1,5 +1,8 @@
 """Setup, unload, and removal of the shared MAC connection."""
 
+import logging
+
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.device_linker.const import (
@@ -103,3 +106,55 @@ async def test_registry_refresh_restores_an_owned_connection(hass) -> None:
     await hass.async_block_till_done()
 
     assert CONNECTION in registry.async_get(target.id).connections
+
+
+@pytest.mark.skipif(
+    not hasattr(dr.DeviceRegistry, "async_get_or_create_child"),
+    reason="Child devices arrived in Home Assistant 2026.11",
+)
+async def test_a_linked_device_that_becomes_a_child_device_is_left_alone(
+    hass, caplog
+) -> None:
+    """An integration turning a linked device into a child device isn't an error.
+
+    A child device has no connections, and only the main device API can
+    change them, so Device Linker skips it instead of trying to put the MAC
+    back (which Home Assistant refuses).
+    """
+    registry, main, target = _devices(hass)
+    entry = _entry(hass, main.id, target.id, added=True)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert CONNECTION in registry.async_get(target.id).connections
+
+    caplog.clear()
+    # The integration converts a device it registered on an earlier run;
+    # forget that this run registered it, as after a restart.
+    registry._live_device_ids.pop(target.config_entry_id, None)  # noqa: SLF001
+    parent = registry.async_get_or_create(
+        config_entry_id=target.config_entry_id,
+        identifiers={("target_integration", "hub")},
+        name="Target hub",
+    )
+    child = registry.async_get_or_create_child(
+        config_entry_id=target.config_entry_id,
+        identifiers={("target_integration", "target")},
+        parent_device_id=parent.id,
+    )
+    await hass.async_block_till_done()
+    assert child.id == target.id
+
+    # Reconciling, rescanning and removing the link all skip the child.
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    await hass.config_entries.async_remove(entry.entry_id)
+    await hass.async_block_till_done()
+
+    problems = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+        and "custom integration" not in record.getMessage().lower()
+        or "ChildDeviceEntry" in record.getMessage()
+    ]
+    assert problems == []

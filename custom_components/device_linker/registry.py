@@ -53,9 +53,18 @@ def text_pairs(items: Iterable[Any]) -> tuple[tuple[str, str], ...]:
 
 
 def get_device(registry: DeviceRegistry, device_id: str) -> DeviceEntry | None:
-    """Get a stored device, excluding synthetic composite devices on newer HA."""
+    """Get a stored main device.
+
+    Synthetic composite devices are left out, and so are child devices
+    (Home Assistant 2026.11): a child device is part of another device, has
+    no connections, and only ``async_update_child_device`` can change it, so
+    it can't carry a link. An integration can turn a linked device into a
+    child device and keep its id.
+    """
     device = registry.async_get(device_id)
-    if device is not None and getattr(device, "is_composite_device", False):
+    if not isinstance(device, DeviceEntry):
+        return None
+    if getattr(device, "is_composite_device", False):
         return None
     return device
 
@@ -354,7 +363,7 @@ def _without_multi_link(
     registry = async_get_device_registry(hass)
     kept: set[str] = set()
     for device_id in ids:
-        device = registry.async_get(device_id)
+        device = get_device(registry, device_id)
         entry = (
             hass.config_entries.async_get_entry(device.config_entry_id)
             if device is not None
