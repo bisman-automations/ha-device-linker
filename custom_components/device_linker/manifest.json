@@ -9,5 +9,5 @@
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/bisman-automations/ha-device-linker/issues",
-  "version": "2.13.4"
+  "version": "2.13.5"
 }

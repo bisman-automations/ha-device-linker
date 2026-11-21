@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.5] - 2026-11-21
+
+### Changed
+
+- **Less work when devices change in ways that don't matter for linking.** A device getting a new firmware version, model, label or similar detail no longer makes Device Linker look for new suggestions, and only a change to a device's addresses or identifiers makes it check whether a link's address needs putting back. Renames, area changes, new and removed devices still trigger a fresh look, as before.
+
 ## [2.13.4] - 2026-11-20
 
 ### Fixed
@@ -296,6 +302,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore the link when the owning integration refreshes the device registry entry.
 - Preserve links during config-entry unloads and remove links when the Device Linker entry is deleted.
 
+[2.13.5]: https://github.com/bisman-automations/ha-device-linker/compare/v2.13.4...v2.13.5
 [2.13.4]: https://github.com/bisman-automations/ha-device-linker/compare/v2.13.3...v2.13.4
 [2.13.3]: https://github.com/bisman-automations/ha-device-linker/compare/v2.13.2...v2.13.3
 [2.13.2]: https://github.com/bisman-automations/ha-device-linker/compare/v2.13.1...v2.13.2

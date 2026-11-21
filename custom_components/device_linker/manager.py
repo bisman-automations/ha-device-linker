@@ -110,6 +110,36 @@ from .registry import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Device fields a scan never reads. An update that changes only these (a new
+# firmware version, a label) can't change a suggestion, so it doesn't rescan.
+# Anything not listed here, including fields a later Home Assistant adds,
+# still rescans.
+FIELDS_SCAN_IGNORES = frozenset(
+    {
+        "configuration_url",
+        "hw_version",
+        "labels",
+        "manufacturer",
+        "model",
+        "model_id",
+        "serial_number",
+        "suggested_area",
+        "sw_version",
+    }
+)
+
+
+@callback
+def device_change_matters(event_data: Any) -> bool:
+    """Whether a device registry event could change what a scan finds."""
+    action = event_data.get("action")
+    if action not in {"create", "update", "remove"}:
+        return False
+    changes = event_data.get("changes")
+    if action != "update" or not isinstance(changes, dict) or not changes:
+        return True
+    return not FIELDS_SCAN_IGNORES.issuperset(changes)
+
 
 @dataclass(frozen=True, slots=True)
 class SuggestionSettings:
@@ -251,7 +281,9 @@ class SuggestionManager:
         """Load preferences and listen for registry changes."""
         self._settings = await _load_settings(self._store)
         self._unsub_device = self.hass.bus.async_listen(
-            dr.EVENT_DEVICE_REGISTRY_UPDATED, self._schedule_device_scan
+            dr.EVENT_DEVICE_REGISTRY_UPDATED,
+            self._schedule_device_scan,
+            event_filter=device_change_matters,
         )
         self._unsub_area = self.hass.bus.async_listen(
             ar.EVENT_AREA_REGISTRY_UPDATED, self._schedule_scan
@@ -510,9 +542,11 @@ class SuggestionManager:
 
     @callback
     def _schedule_device_scan(self, event: Event) -> None:
-        """Rescan after a device is created, updated, or removed."""
-        action = event.data.get("action")
-        if action not in {"create", "update", "remove"}:
+        """Rescan after a device is created, updated, or removed.
+
+        ``device_change_matters`` filters out updates a scan can't see.
+        """
+        if not device_change_matters(event.data):
             return
         self._schedule_scan(event)
 

@@ -191,7 +191,9 @@ class LinkRuntime:
             _drop_services_from_automatic_links(self.hass, self.entry)
         await self.async_reconcile(scan=False)
         self._unsub = self.hass.bus.async_listen(
-            dr.EVENT_DEVICE_REGISTRY_UPDATED, self._restore_owned_links
+            dr.EVENT_DEVICE_REGISTRY_UPDATED,
+            self._restore_owned_links,
+            event_filter=_may_drop_a_link,
         )
 
     @callback
@@ -271,6 +273,23 @@ class LinkRuntime:
                 settings[CONF_ADDED_CONNECTIONS]
             ).get(device_id, False):
                 _add_owned(registry, settings, only=device_id)
+
+
+@callback
+def _may_drop_a_link(event_data: Any) -> bool:
+    """Whether a device registry event could have taken a link's value off.
+
+    A removed device has nothing to restore, and an update that leaves the
+    connections and identifiers alone (a new firmware version, a rename)
+    can't have dropped a MAC or shared ID.
+    """
+    action = event_data.get("action")
+    if action == "remove":
+        return False
+    changes = event_data.get("changes")
+    if action != "update" or not isinstance(changes, dict):
+        return True
+    return "connections" in changes or "identifiers" in changes
 
 
 def _pairs_of(settings: dict[str, Any]) -> set[str]:
